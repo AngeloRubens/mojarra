@@ -94,6 +94,7 @@ public class SwarScanBenchmark {
         }
         chars = savedChars;
         bytes = savedBytes;
+        string = new String(savedChars);
     }
 
     private void check(String what) {
