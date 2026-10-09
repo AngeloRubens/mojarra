@@ -22,6 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Deque;
 import java.util.List;
+import java.util.Locale;
 
 import com.sun.faces.config.FaceletsConfiguration;
 import com.sun.faces.io.FastStringWriter;
@@ -50,6 +51,9 @@ final class PreRenderedInstruction implements Instruction {
 
     /** Elements whose start or end has side effects beyond writing markup, or that switch the writer's mode. */
     private static final List<String> EXCLUDED_ELEMENTS = List.of("script", "style", "cdata", "head", "body");
+
+    /** Elements whose content the writer does not escape or buffers separately. */
+    private static final List<String> RAW_CONTENT_ELEMENTS = List.of("script", "style", "cdata");
 
     private final Instruction[] instructions;
 
@@ -124,6 +128,15 @@ final class PreRenderedInstruction implements Instruction {
         List<Instruction> result = null;
         int i = 0;
         while (i < instructions.length) {
+            // The content of script/style/cdata is written in a mode where pre-rendering never applies: keep it as is.
+            int rawEnd = rawContentEnd(instructions, i);
+            if (rawEnd > i) {
+                if (result != null) {
+                    result.addAll(Arrays.asList(instructions).subList(i, rawEnd));
+                }
+                i = rawEnd;
+                continue;
+            }
             int end = balancedRunEnd(instructions, i);
             if (end > i) {
                 if (result == null) {
@@ -174,6 +187,30 @@ final class PreRenderedInstruction implements Instruction {
             }
         }
         return lastBalancedEnd;
+    }
+
+    /**
+     * If {@code start} opens a script, style or cdata element, returns the index after its matching end element (or
+     * the array length), otherwise {@code start}.
+     */
+    private static int rawContentEnd(Instruction[] instructions, int start) {
+        if (!(instructions[start] instanceof StartElementInstruction)) {
+            return start;
+        }
+        String element = ((StartElementInstruction) instructions[start]).getElement();
+        if (!RAW_CONTENT_ELEMENTS.contains(element.toLowerCase(Locale.ROOT))) {
+            return start;
+        }
+        int depth = 0;
+        for (int j = start; j < instructions.length; j++) {
+            if (instructions[j] instanceof StartElementInstruction && ((StartElementInstruction) instructions[j]).getElement().equalsIgnoreCase(element)) {
+                depth++;
+            } else if (instructions[j] instanceof EndElementInstruction && ((EndElementInstruction) instructions[j]).getElement().equalsIgnoreCase(element)
+                    && --depth == 0) {
+                return j + 1;
+            }
+        }
+        return instructions.length;
     }
 
     private static boolean isExcluded(String element) {

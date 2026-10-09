@@ -819,9 +819,29 @@ public class ExternalContextImpl extends ExternalContext {
     @Override
     public Writer getResponseOutputWriter() throws IOException {
         if (responseOutputWriter == null) {
-            responseOutputWriter = new ResponseOutputWriter(response.getWriter());
+            responseOutputWriter = createResponseOutputWriter();
         }
         return responseOutputWriter;
+    }
+
+    /**
+     * With {@code com.sun.faces.utf8ResponseBuffer} enabled and a UTF-8 response, encodes straight into a byte buffer
+     * drained to the container's output stream, skipping the container's char buffer and charset encoder. Falls back
+     * to the container's writer when the response is not UTF-8, or when its writer was already obtained by someone
+     * else (the servlet API then forbids the output stream).
+     */
+    private ResponseOutputWriter createResponseOutputWriter() throws IOException {
+        if ("UTF-8".equalsIgnoreCase(response.getCharacterEncoding())) {
+            WebConfiguration webConfig = WebConfiguration.getInstance(this);
+            if (webConfig != null && webConfig.isOptionEnabled(WebConfiguration.BooleanWebContextInitParameter.Utf8ResponseBuffer)) {
+                try {
+                    return new Utf8ResponseOutputWriter(response.getOutputStream());
+                } catch (IllegalStateException writerAlreadyObtained) {
+                    // Keep using the writer the response already handed out.
+                }
+            }
+        }
+        return new CharResponseOutputWriter(response.getWriter());
     }
 
     /**
@@ -1221,15 +1241,31 @@ public class ExternalContextImpl extends ExternalContext {
      * container's own buffer. Output already drained to the container's writer is beyond reach, which matches the
      * container's own semantics -- once it is committed it can no longer be taken back.
      */
-    private static class ResponseOutputWriter extends Writer {
+    abstract static class ResponseOutputWriter extends Writer {
 
-        private static final int BUFFER_SIZE = 8192;
+        static final int BUFFER_SIZE = 8192;
+
+        /**
+         * Drop what is still buffered, so that it never reaches the container.
+         */
+        abstract void discard();
+
+        /**
+         * Hand what is buffered to the container, without flushing the container itself.
+         */
+        abstract void drain() throws IOException;
+    }
+
+    /**
+     * {@link ResponseOutputWriter} buffering chars for the container's writer.
+     */
+    private static final class CharResponseOutputWriter extends ResponseOutputWriter {
 
         private final Writer wrapped;
         private final char[] buffer = new char[BUFFER_SIZE];
         private int count;
 
-        private ResponseOutputWriter(Writer wrapped) {
+        private CharResponseOutputWriter(Writer wrapped) {
             this.wrapped = wrapped;
         }
 
@@ -1277,20 +1313,183 @@ public class ExternalContextImpl extends ExternalContext {
             wrapped.close();
         }
 
-        /**
-         * Drop what is still buffered, so that it never reaches the container's writer.
-         */
-        private void discard() {
+        @Override
+        void discard() {
             count = 0;
         }
 
-        private void drain() throws IOException {
+        @Override
+        void drain() throws IOException {
             if (count > 0) {
                 wrapped.write(buffer, 0, count);
                 count = 0;
             }
         }
 
+    }
+
+    /**
+     * {@link ResponseOutputWriter} encoding UTF-8 itself into a byte buffer drained to the container's output stream.
+     * ASCII, the bulk of markup, is copied one byte per char in a tight loop; a surrogate pair split across two writes is
+     * joined, and an unpaired surrogate becomes {@code ?}, as the JDK's UTF-8 encoder replaces it.
+     */
+    static final class Utf8ResponseOutputWriter extends ResponseOutputWriter {
+
+        private final OutputStream wrapped;
+        private final byte[] buffer = new byte[BUFFER_SIZE];
+        private int count;
+        private char pendingHighSurrogate;
+
+        Utf8ResponseOutputWriter(OutputStream wrapped) {
+            this.wrapped = wrapped;
+        }
+
+        @Override
+        public void write(int c) throws IOException {
+            if (count > BUFFER_SIZE - 4) {
+                drain();
+            }
+            encode((char) c);
+        }
+
+        @Override
+        public void write(char[] chars, int offset, int length) throws IOException {
+            int end = offset + length;
+            int i = offset;
+            while (i < end) {
+                if (pendingHighSurrogate == 0) {
+                    int room = BUFFER_SIZE - count;
+                    if (room < 4) {
+                        drain();
+                        room = BUFFER_SIZE;
+                    }
+                    int limit = Math.min(end, i + room);
+                    byte[] bytes = buffer;
+                    int position = count;
+                    while (i < limit) {
+                        char c = chars[i];
+                        if (c >= 0x80) {
+                            break;
+                        }
+                        bytes[position++] = (byte) c;
+                        i++;
+                    }
+                    count = position;
+                    if (i == end) {
+                        return;
+                    }
+                    if (chars[i] < 0x80) {
+                        continue; // buffer full
+                    }
+                }
+                if (count > BUFFER_SIZE - 4) {
+                    drain();
+                }
+                encode(chars[i++]);
+            }
+        }
+
+        @Override
+        public void write(String string, int offset, int length) throws IOException {
+            int end = offset + length;
+            int i = offset;
+            while (i < end) {
+                if (pendingHighSurrogate == 0) {
+                    int room = BUFFER_SIZE - count;
+                    if (room < 4) {
+                        drain();
+                        room = BUFFER_SIZE;
+                    }
+                    int limit = Math.min(end, i + room);
+                    byte[] bytes = buffer;
+                    int position = count;
+                    while (i < limit) {
+                        char c = string.charAt(i);
+                        if (c >= 0x80) {
+                            break;
+                        }
+                        bytes[position++] = (byte) c;
+                        i++;
+                    }
+                    count = position;
+                    if (i == end) {
+                        return;
+                    }
+                    if (string.charAt(i) < 0x80) {
+                        continue; // buffer full
+                    }
+                }
+                if (count > BUFFER_SIZE - 4) {
+                    drain();
+                }
+                encode(string.charAt(i++));
+            }
+        }
+
+        /** Encodes one char; the caller guarantees room for 4 bytes. */
+        private void encode(char c) {
+            if (pendingHighSurrogate != 0) {
+                char high = pendingHighSurrogate;
+                pendingHighSurrogate = 0;
+                if (Character.isLowSurrogate(c)) {
+                    int codePoint = Character.toCodePoint(high, c);
+                    buffer[count++] = (byte) (0xF0 | (codePoint >> 18));
+                    buffer[count++] = (byte) (0x80 | ((codePoint >> 12) & 0x3F));
+                    buffer[count++] = (byte) (0x80 | ((codePoint >> 6) & 0x3F));
+                    buffer[count++] = (byte) (0x80 | (codePoint & 0x3F));
+                    return;
+                }
+                // Unpaired: replaced, leaving the 3 bytes of room any single char below needs.
+                buffer[count++] = '?';
+            }
+            if (c < 0x80) {
+                buffer[count++] = (byte) c;
+            } else if (c < 0x800) {
+                buffer[count++] = (byte) (0xC0 | (c >> 6));
+                buffer[count++] = (byte) (0x80 | (c & 0x3F));
+            } else if (Character.isHighSurrogate(c)) {
+                pendingHighSurrogate = c;
+            } else if (Character.isLowSurrogate(c)) {
+                buffer[count++] = '?';
+            } else {
+                buffer[count++] = (byte) (0xE0 | (c >> 12));
+                buffer[count++] = (byte) (0x80 | ((c >> 6) & 0x3F));
+                buffer[count++] = (byte) (0x80 | (c & 0x3F));
+            }
+        }
+
+        @Override
+        public void flush() throws IOException {
+            drain();
+            wrapped.flush();
+        }
+
+        @Override
+        public void close() throws IOException {
+            if (pendingHighSurrogate != 0) {
+                pendingHighSurrogate = 0;
+                if (count > BUFFER_SIZE - 1) {
+                    drain();
+                }
+                buffer[count++] = '?';
+            }
+            drain();
+            wrapped.close();
+        }
+
+        @Override
+        void discard() {
+            count = 0;
+            pendingHighSurrogate = 0;
+        }
+
+        @Override
+        void drain() throws IOException {
+            if (count > 0) {
+                wrapped.write(buffer, 0, count);
+                count = 0;
+            }
+        }
     }
 
 }
