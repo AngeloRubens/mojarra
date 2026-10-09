@@ -1,0 +1,64 @@
+name: JMH benchmarks
+
+on:
+  push:
+    branches:
+      - 'perf-*'
+    paths:
+      - 'benchmarks/**'
+      - 'impl/src/main/**'
+      - '.github/workflows/benchmarks.yml'
+  workflow_dispatch:
+    inputs:
+      include:
+        description: 'JMH include regex (empty = all benchmarks)'
+        required: false
+        default: ''
+      args:
+        description: 'Extra JMH arguments'
+        required: false
+        default: '-wi 3 -i 5 -f 2'
+
+jobs:
+  jmh:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build Mojarra impl
+        run: mvn -B -q -f impl/pom.xml install -DskipTests -Dmaven.javadoc.skip=true
+
+      - name: Build benchmarks
+        run: mvn -B -q -f benchmarks/pom.xml package
+
+      - name: Run JMH
+        env:
+          INCLUDE: ${{ github.event.inputs.include }}
+          ARGS: ${{ github.event.inputs.args || '-wi 3 -i 5 -f 2' }}
+        run: |
+          lscpu | grep -E 'Model name|^CPU\(s\)|Flags' | sed 's/Flags:.*\(avx[^ ]*\).*/AVX: present/' || true
+          java -jar benchmarks/target/benchmarks.jar $INCLUDE $ARGS -rf json -rff jmh-result.json
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## JMH results ($(java -version 2>&1 | head -1))"
+            echo
+            echo "Runner: $(lscpu | grep 'Model name' | sed 's/Model name: *//'), $(nproc) vCPU"
+            echo
+            python3 benchmarks/ci/report.py jmh-result.json
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: jmh-result
+          path: jmh-result.json
