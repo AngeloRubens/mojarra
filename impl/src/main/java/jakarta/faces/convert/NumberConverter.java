@@ -26,6 +26,7 @@ import java.util.Currency;
 import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Objects;
 import java.util.regex.Pattern;
 
 import jakarta.faces.component.PartialStateHolder;
@@ -218,6 +219,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.currencyCode = currencyCode;
+        clearCacheKeys();
 
     }
 
@@ -246,6 +248,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.currencySymbol = currencySymbol;
+        clearCacheKeys();
 
     }
 
@@ -274,6 +277,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.groupingUsed = groupingUsed;
+        clearCacheKeys();
 
     }
 
@@ -303,6 +307,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.integerOnly = integerOnly;
+        clearCacheKeys();
 
     }
 
@@ -331,6 +336,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.maxFractionDigits = maxFractionDigits;
+        clearCacheKeys();
 
     }
 
@@ -359,6 +365,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.maxIntegerDigits = maxIntegerDigits;
+        clearCacheKeys();
 
     }
 
@@ -387,6 +394,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.minFractionDigits = minFractionDigits;
+        clearCacheKeys();
 
     }
 
@@ -415,6 +423,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.minIntegerDigits = minIntegerDigits;
+        clearCacheKeys();
 
     }
 
@@ -448,6 +457,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.locale = locale;
+        clearCacheKeys();
 
     }
 
@@ -477,6 +487,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.pattern = pattern;
+        clearCacheKeys();
 
     }
 
@@ -507,6 +518,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
         clearInitialState();
         this.type = type;
+        clearCacheKeys();
 
     }
 
@@ -900,13 +912,38 @@ public class NumberConverter implements Converter, PartialStateHolder {
         return cache;
     }
 
+    // The cache keys only change when a property or the resolved locale does, but the converter runs once per value
+    // (per row in an iterated table), so they are memoized per instance instead of being rebuilt on every call. Every
+    // property setter and restoreState clears them.
+    private transient String parserKey;
+    private transient Locale parserKeyLocale;
+    private transient String formatterKey;
+    private transient Locale formatterKeyLocale;
+
+    private void clearCacheKeys() {
+        parserKey = null;
+        formatterKey = null;
+    }
+
     /** Key over every property {@link #getNumberFormat} reads to build the base parser. */
     private String parserKey(Locale locale) {
-        return new StringBuilder(32).append(pattern).append('|').append(type).append('|').append(locale).toString();
+        if (parserKey == null || !Objects.equals(parserKeyLocale, locale)) {
+            parserKey = new StringBuilder(32).append(pattern).append('|').append(type).append('|').append(locale).toString();
+            parserKeyLocale = locale;
+        }
+        return parserKey;
     }
 
     /** Key over every property {@link #getCachedFormatter} reads to build the formatter. */
     private String formatterKey(Locale locale) {
+        if (formatterKey == null || !Objects.equals(formatterKeyLocale, locale)) {
+            formatterKey = buildFormatterKey(locale);
+            formatterKeyLocale = locale;
+        }
+        return formatterKey;
+    }
+
+    private String buildFormatterKey(Locale locale) {
         return new StringBuilder(64).append(pattern).append('|').append(type).append('|').append(locale).append('|')
                 .append(currencyCode).append('|').append(currencySymbol).append('|').append(groupingUsed).append('|')
                 .append(minIntegerDigits).append('|').append(maxIntegerDigits).append('|').append(minFractionDigits)
@@ -990,6 +1027,7 @@ public class NumberConverter implements Converter, PartialStateHolder {
             locale = (Locale) values[8];
             pattern = (String) values[9];
             type = (String) values[10];
+            clearCacheKeys();
         }
 
     }

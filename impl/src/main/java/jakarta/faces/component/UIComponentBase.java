@@ -62,8 +62,12 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.NoSuchElementException;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.logging.Level;
 import java.util.logging.Logger;
+
+import com.sun.faces.util.PropertyAccessors;
 
 import jakarta.el.ELException;
 import jakarta.el.ValueExpression;
@@ -1764,7 +1768,20 @@ public abstract class UIComponentBase extends UIComponent {
 
     private static final Object NOT_MARKER = new Object();
 
+    // Every marker key is longer than any standard component property name, so the common non-marker lookup (each
+    // getAttributes().get/put of a property during render and buildView) is rejected by a length check instead of six
+    // String.equals calls.
+    private static final int MIN_MARKER_KEY_LENGTH = Math.min(Math.min(MARK_CREATED.length(), KEY.length()),
+            Math.min(Math.min(REMOVED_CHILDREN.length(), DYNAMIC_COMPONENT.length()), Math.min(MARK_DELETED.length(), MARK_CHILDREN_MODIFIED.length())));
+
+    private static boolean isMarkerKeyCandidate(Object key) {
+        return key instanceof String && ((String) key).length() >= MIN_MARKER_KEY_LENGTH;
+    }
+
     private Object markerGet(Object key) {
+        if (!isMarkerKeyCandidate(key)) {
+            return NOT_MARKER;
+        }
         if (MARK_CREATED.equals(key)) {
             return markCreated;
         }
@@ -1789,6 +1806,9 @@ public abstract class UIComponentBase extends UIComponent {
     // Returns true if the key is a marker (so AttributesMap can skip the getPropertyDescriptor probe:
     // a framework marker is never a JavaBean property, so the lookup is guaranteed to miss).
     private boolean markerPut(Object key, Object value) {
+        if (!isMarkerKeyCandidate(key)) {
+            return false;
+        }
         if (MARK_CREATED.equals(key)) {
             markCreated = (String) value;
         } else if (KEY.equals(key)) {
@@ -1808,6 +1828,9 @@ public abstract class UIComponentBase extends UIComponent {
     }
 
     private boolean markerRemove(Object key) {
+        if (!isMarkerKeyCandidate(key)) {
+            return false;
+        }
         if (MARK_CREATED.equals(key)) {
             markCreated = null;
         } else if (KEY.equals(key)) {
@@ -2276,6 +2299,8 @@ public abstract class UIComponentBase extends UIComponent {
         private transient Map<String, Method> readMap;
         // Write-side counterpart of readMap (see UIComponentBase.writeMethodMap); used by the property-write path in put.
         private transient Map<String, Method> writeMap;
+        // Per-class metadata holding the generated getter invokers used by the hot property-read path in get.
+        private transient ComponentMetadata metadata;
         private transient UIComponentBase component;
         private static final long serialVersionUID = -6773035086539772945L;
 
@@ -2287,6 +2312,7 @@ public abstract class UIComponentBase extends UIComponent {
             pdMap = this.component.getDescriptorMap();
             readMap = this.component.getReadMethodMap();
             writeMap = this.component.getWriteMethodMap();
+            metadata = readMap == null ? null : COMPONENT_METADATA.get(this.component.getClass());
         }
 
         @Override
@@ -2342,13 +2368,13 @@ public abstract class UIComponentBase extends UIComponent {
                 // The access-suppressed property getter is cached per class by name. Invoke it directly and skip the
                 // per-read PropertyDescriptor lookup and access-check suppression -- the descriptor is only needed to
                 // discover the getter once per class. This is the hot path for every property-backed attribute read.
-                Method readMethod = readMap == null ? null : readMap.get(key);
-                if (readMethod != null) {
-                    result = invokeReadMethod(readMethod);
+                Function<Object, Object> reader = metadata == null ? null : metadata.reader(key);
+                if (reader != null) {
+                    result = invokeReader(reader);
                 } else {
                     PropertyDescriptor pd = getPropertyDescriptor(key);
                     if (pd != null) {
-                        readMethod = pd.getReadMethod();
+                        Method readMethod = pd.getReadMethod();
                         if (readMethod != null) {
                             suppressAccessCheck(readMethod);
                             result = invokeReadMethod(readMethod);
@@ -2627,6 +2653,15 @@ public abstract class UIComponentBase extends UIComponent {
                 component.setCompositeComponentFlag(true);
             }
             return component.getStateHelper().put(PropertyKeys.attributes, key, value);
+        }
+
+        private Object invokeReader(Function<Object, Object> reader) {
+            try {
+                return reader.apply(component);
+            } catch (Throwable t) {
+                // Same wrapping as invokeReadMethod applies to the InvocationTargetException's target.
+                throw new FacesException(t);
+            }
         }
 
         private Object invokeReadMethod(Method readMethod) {
@@ -3588,10 +3623,27 @@ public abstract class UIComponentBase extends UIComponent {
         private final Map<String, Method> readMethods;
         private final Map<String, Method> writeMethods;
 
+        // Generated getter invokers, created on first use per property (see PropertyAccessors): only the properties
+        // actually read through getAttributes() pay for a generated class.
+        private final ConcurrentHashMap<String, Function<Object, Object>> readers = new ConcurrentHashMap<>();
+
         private ComponentMetadata(Map<String, PropertyDescriptor> propertyDescriptors, Map<String, Method> readMethods, Map<String, Method> writeMethods) {
             this.propertyDescriptors = propertyDescriptors;
             this.readMethods = readMethods;
             this.writeMethods = writeMethods;
+        }
+
+        /** The invoker of the named property's getter, or {@code null} when the property has no getter. */
+        Function<Object, Object> reader(String name) {
+            Function<Object, Object> reader = readers.get(name);
+            if (reader == null) {
+                Method readMethod = readMethods.get(name);
+                if (readMethod == null) {
+                    return null;
+                }
+                reader = readers.computeIfAbsent(name, k -> PropertyAccessors.reader(readMethod));
+            }
+            return reader;
         }
     }
 

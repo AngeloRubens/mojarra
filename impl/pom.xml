@@ -73,6 +73,8 @@
     </scm>
 
    <properties>
+        <!-- Extra JVM arguments for unit tests, e.g. -Dsurefire.extraArgLine="--add-modules jdk.incubator.vector". -->
+        <surefire.extraArgLine></surefire.extraArgLine>
         <maven.compiler.release>17</maven.compiler.release>
         <mojarra.logstrings.version>${project.version}</mojarra.logstrings.version>
     </properties>
@@ -304,7 +306,7 @@
                 <version>3.2.5</version>
                 <configuration>
                     <trimStackTrace>false</trimStackTrace>
-                    <argLine>--add-opens java.base/java.lang=ALL-UNNAMED</argLine>
+                    <argLine>--add-opens java.base/java.lang=ALL-UNNAMED ${surefire.extraArgLine}</argLine>
                     <systemPropertyVariables>
                         <java.util.logging.config.file>${project.build.testOutputDirectory}/logging.properties</java.util.logging.config.file>
                         <contextparams.md>${project.basedir}/../CONTEXT-PARAMS.md</contextparams.md>
@@ -415,7 +417,8 @@
                             com.sun.enterprise.*;resolution:=optional,
                             org.jboss.weld.*;resolution:=optional,
                             org.xml.sax.*,
-                            javax.naming.*
+                            javax.naming.*,
+                            jdk.incubator.vector;resolution:=optional
                         </Import-Package>
                         <!--
                             Allow Mojarra to load alternative AnnotationProvider, FaceletConfigResourceProvider,
@@ -527,4 +530,46 @@
             </plugin>
         </plugins>
     </build>
+
+    <profiles>
+        <!--
+            Compiles the Vector API (jdk.incubator.vector) escaping scanner when building on Java 21+. The class is only
+            loaded reflectively, after checking that the running JVM has the incubator module (see HtmlEscapeScanner),
+            so the jar keeps running on Java 17; built with an older JDK, the jar simply lacks the class and escaping
+            uses its non-Vector scan.
+        -->
+        <profile>
+            <id>vector-escaping</id>
+            <activation>
+                <jdk>[21,)</jdk>
+            </activation>
+            <build>
+                <plugins>
+                    <plugin>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>compile-vector-escaping</id>
+                                <phase>compile</phase>
+                                <goals>
+                                    <goal>compile</goal>
+                                </goals>
+                                <configuration>
+                                    <release>21</release>
+                                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                                    <compileSourceRoots>
+                                        <compileSourceRoot>${project.basedir}/src/main/java-vector</compileSourceRoot>
+                                    </compileSourceRoots>
+                                    <compilerArgs>
+                                        <arg>--add-modules</arg>
+                                        <arg>jdk.incubator.vector</arg>
+                                    </compilerArgs>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>
