@@ -19,6 +19,8 @@ package com.sun.faces.facelets.compiler;
 import java.io.IOException;
 import java.io.Writer;
 
+import com.sun.faces.config.WebConfiguration;
+import com.sun.faces.config.WebConfiguration.BooleanWebContextInitParameter;
 import com.sun.faces.facelets.UniqueIdSlot;
 import com.sun.faces.facelets.el.ELText;
 import com.sun.faces.facelets.tag.faces.ComponentSupport;
@@ -53,7 +55,7 @@ final class UIInstructionHandler extends AbstractUIHandler {
     public UIInstructionHandler(String alias, String id, Instruction[] instructions, ELText txt) {
         this.alias = alias;
         this.id = id;
-        this.instructions = instructions;
+        this.instructions = isPreRenderLiteralMarkupEnabled() ? PreRenderedInstruction.coalesce(instructions) : instructions;
         this.txt = txt;
         length = txt.toString().length();
 
@@ -69,6 +71,15 @@ final class UIInstructionHandler extends AbstractUIHandler {
         }
 
         this.literal = literal;
+    }
+
+    private static boolean isPreRenderLiteralMarkupEnabled() {
+        FacesContext context = FacesContext.getCurrentInstance();
+        if (context == null) {
+            return false;
+        }
+        WebConfiguration webConfig = WebConfiguration.getInstance(context.getExternalContext());
+        return webConfig != null && webConfig.isOptionEnabled(BooleanWebContextInitParameter.PreRenderLiteralMarkup);
     }
 
     @Override

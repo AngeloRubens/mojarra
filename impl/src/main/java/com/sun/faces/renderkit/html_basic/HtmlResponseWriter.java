@@ -38,7 +38,9 @@ import jakarta.faces.FacesException;
 import jakarta.faces.component.UIComponent;
 import jakarta.faces.context.ExternalContext;
 import jakarta.faces.context.FacesContext;
+import jakarta.faces.context.PartialResponseWriter;
 import jakarta.faces.context.ResponseWriter;
+import jakarta.faces.context.ResponseWriterWrapper;
 import jakarta.faces.render.Renderer;
 
 /**
@@ -286,6 +288,59 @@ public class HtmlResponseWriter extends ResponseWriter {
             escapeIso = !HtmlUtils.isISO8859_1encoding(charsetName) && !HtmlUtils.isUTFencoding(charsetName);
             break;
         }
+    }
+
+    // ---------------------------------------------------------- Pre-rendered literal markup (Facelets)
+
+    private static final String DELAYED_INIT_PARTIAL_RESPONSE_WRITER = "com.sun.faces.context.PartialViewContextImpl$DelayedInitPartialResponseWriter";
+
+    /**
+     * Number of distinct {@link #getLiteralMarkupKey()} values.
+     */
+    public static final int LITERAL_MARKUP_KEYS = 32;
+
+    /**
+     * Returns the {@code HtmlResponseWriter} that receives the element, attribute and text calls made on the given
+     * writer when nothing in between can change them: the writer itself, or Mojarra's own partial response writers,
+     * which pass those calls straight through. Returns {@code null} for any other writer (e.g. a third-party wrapper),
+     * whose calls must keep being made one by one.
+     */
+    public static HtmlResponseWriter unwrapForLiteralMarkup(ResponseWriter writer) {
+        ResponseWriter current = writer;
+        while (current != null) {
+            Class<?> type = current.getClass();
+            if (type == HtmlResponseWriter.class) {
+                return (HtmlResponseWriter) current;
+            }
+            if (type != PartialResponseWriter.class && !DELAYED_INIT_PARTIAL_RESPONSE_WRITER.equals(type.getName())) {
+                return null;
+            }
+            current = ((ResponseWriterWrapper) current).getWrapped();
+        }
+        return null;
+    }
+
+    /**
+     * Identifies, in [0, {@link #LITERAL_MARKUP_KEYS}), every setting of this writer that affects how a self-contained
+     * block of literal elements, attributes and text is written, so that output captured once (through
+     * {@link #cloneWithWriter}) can be reused for any writer with the same key. Returns -1 when the current state
+     * forbids writing pre-rendered markup (inside a script, style or CDATA element, or with escaping turned off).
+     */
+    public int getLiteralMarkupKey() {
+        if (withinScript || withinStyle || dontEscape || isCdata) {
+            return -1;
+        }
+        return (escapeUnicode ? 1 : 0) | (escapeIso ? 2 : 0) | (isPartial ? 4 : 0) | (isScriptInAttributeValueEnabled ? 8 : 0)
+                | (writingCdata ? 16 : 0);
+    }
+
+    /**
+     * Writes markup previously captured for this writer's {@link #getLiteralMarkupKey()}, after closing a pending start
+     * element exactly as the first captured call would have.
+     */
+    public void writePreRendered(String markup) throws IOException {
+        closeStartIfNecessary();
+        writer.write(markup);
     }
 
     private WebConfiguration getWebConfiguration(WebConfiguration webConfig) {

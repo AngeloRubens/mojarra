@@ -73,7 +73,7 @@
     </scm>
 
    <properties>
-        <!-- Extra JVM arguments for unit tests, e.g. -Dsurefire.extraArgLine="--add-modules jdk.incubator.vector". -->
+        <!-- Extra JVM arguments for unit tests, e.g. the add-modules option for jdk.incubator.vector. -->
         <surefire.extraArgLine></surefire.extraArgLine>
         <maven.compiler.release>17</maven.compiler.release>
         <mojarra.logstrings.version>${project.version}</mojarra.logstrings.version>

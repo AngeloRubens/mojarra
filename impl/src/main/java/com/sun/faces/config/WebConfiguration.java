@@ -916,6 +916,7 @@ public class WebConfiguration {
         CompressViewState("com.sun.faces.compressViewState", true),
         EnableJSStyleHiding("com.sun.faces.enableJSStyleHiding", false),
         EnableScriptInAttributeValue("com.sun.faces.enableScriptsInAttributeValues", true),
+        PreRenderLiteralMarkup("com.sun.faces.preRenderLiteralMarkup", false),
         WriteStateAtFormEnd("com.sun.faces.writeStateAtFormEnd", true),
         SerializeServerState(StateManager.SERIALIZE_SERVER_STATE_PARAM_NAME, false),
         EnableViewStateIdRendering("com.sun.faces.enableViewStateIdRendering", true),

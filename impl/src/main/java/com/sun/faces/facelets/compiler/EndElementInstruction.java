@@ -40,6 +40,10 @@ final class EndElementInstruction implements Instruction {
         this.element = element;
     }
 
+    String getElement() {
+        return element;
+    }
+
     @Override
     public void write(FacesContext context) throws IOException {
         if (HEAD_ELEMENT.equalsIgnoreCase(element)) {

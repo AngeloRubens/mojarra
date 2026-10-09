@@ -29,6 +29,10 @@ final class StartElementInstruction implements Instruction {
         this.element = element;
     }
 
+    String getElement() {
+        return element;
+    }
+
     @Override
     public void write(FacesContext context) throws IOException {
         context.getResponseWriter().startElement(element, null);
