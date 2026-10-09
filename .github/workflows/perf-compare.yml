@@ -31,6 +31,14 @@ on:
         description: 'Measured iterations per scenario'
         required: false
         default: '1000'
+      options:
+        description: 'Options enabled in arm 3 (space separated: prerender utf8 vector)'
+        required: false
+        default: 'prerender utf8 vector'
+      arms:
+        description: 'Arms to run (space separated: 1 2 3)'
+        required: false
+        default: '1 2 3'
 
 jobs:
   compare:
@@ -41,6 +49,8 @@ jobs:
       SCENARIOS: ${{ github.event.inputs.scenarios || '' }}
       WARMUP: ${{ github.event.inputs.warmup || '200' }}
       RUNS: ${{ github.event.inputs.runs || '1000' }}
+      OPTIONS: ${{ github.event.inputs.options || 'prerender utf8 vector' }}
+      ARMS: ${{ github.event.inputs.arms || '1 2 3' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -63,6 +73,7 @@ jobs:
           mvn -B -q -f "$RUNNER_TEMP/baseline/pom.xml" -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
 
       - name: Arm 1 - baseline
+        if: contains(env.ARMS, '1')
         working-directory: test/perf
         run: |
           mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
@@ -70,25 +81,39 @@ jobs:
           cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/1-baseline.txt"
 
       - name: Install this branch impl
-        run: mvn -B -q -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
+        run: mkdir -p perf-out &&  mvn -B -q -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
 
       - name: Arm 2 - this branch, defaults
+        if: contains(env.ARMS, '2')
         working-directory: test/perf
         run: |
           mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
           cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/2-defaults.txt"
 
-      - name: Arm 3 - this branch, all options on
+      - name: Arm 3 - this branch, options on
+        if: contains(env.ARMS, '3')
         working-directory: test/perf
         run: |
           WEB_XML=src/main/webapp/WEB-INF/web.xml
           cp "$WEB_XML" "$RUNNER_TEMP/web.xml.orig"
-          sed -i 's#</web-app>#    <context-param><param-name>com.sun.faces.preRenderLiteralMarkup</param-name><param-value>true</param-value></context-param>\n    <context-param><param-name>com.sun.faces.utf8ResponseBuffer</param-name><param-value>true</param-value></context-param>\n</web-app>#' "$WEB_XML"
-          grep -n "preRenderLiteralMarkup\|utf8ResponseBuffer" "$WEB_XML"
+          PARAMS=""
+          case " $OPTIONS " in *" prerender "*) PARAMS="$PARAMS<context-param><param-name>com.sun.faces.preRenderLiteralMarkup</param-name><param-value>true</param-value></context-param>";; esac
+          case " $OPTIONS " in *" utf8 "*) PARAMS="$PARAMS<context-param><param-name>com.sun.faces.utf8ResponseBuffer</param-name><param-value>true</param-value></context-param>";; esac
+          JVM_ARGS="-Xmx1g"
+          case " $OPTIONS " in *" vector "*) JVM_ARGS="$JVM_ARGS --add-modules jdk.incubator.vector";; esac
+          sed -i "s#</web-app>#    $PARAMS\n</web-app>#" "$WEB_XML"
+          tail -3 "$WEB_XML"
+          status=0
           mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" \
-              -Dperf.jvmArguments="-Xmx1g --add-modules jdk.incubator.vector"
-          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/3-all-on.txt"
+              -Dperf.jvmArguments="$JVM_ARGS" || status=$?
           cp "$RUNNER_TEMP/web.xml.orig" "$WEB_XML"
+          if [ $status -ne 0 ]; then
+            echo "::group::Tomcat logs"
+            for f in target/apache-tomcat-*/logs/*; do echo "== $f"; grep -v "^\s*$" "$f" | grep -B2 -A40 -E "SEVERE|Exception" | head -150; done
+            echo "::endgroup::"
+            exit $status
+          fi
+          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/3-all-on.txt"
 
       - name: Summary
         if: always()
@@ -112,4 +137,6 @@ jobs:
         if: always()
         with:
           name: perf-compare
-          path: perf-out/
+          path: |
+            perf-out/
+            test/perf/target/apache-tomcat-*/logs/
