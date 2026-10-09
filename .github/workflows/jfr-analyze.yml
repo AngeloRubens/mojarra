@@ -1,0 +1,60 @@
+name: Analyze JFR from a previous perf run
+
+on:
+  push:
+    branches:
+      - 'perf-*'
+    paths:
+      - '.github/workflows/jfr-analyze.yml'
+      - 'benchmarks/ci/jfr_mojarra.py'
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: 'Run id of an "End-to-end perf" run (empty = latest successful one)'
+        required: false
+        default: ''
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+
+      - name: Resolve run id
+        id: run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.inputs.run_id }}
+        run: |
+          if [ -z "$RUN_ID" ]; then
+            RUN_ID=$(gh run list -R "$GITHUB_REPOSITORY" -w perf-e2e.yml -s success -L 1 --json databaseId -q '.[0].databaseId')
+          fi
+          echo "id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: perf-e2e
+          run-id: ${{ steps.run.outputs.id }}
+          github-token: ${{ github.token }}
+          path: perf
+
+      - name: Report
+        run: |
+          {
+            echo "## JFR analysis of run ${{ steps.run.outputs.id }}"
+            echo
+            python3 benchmarks/ci/jfr_mojarra.py perf/mojarra.jfr 40
+          } | tee jfr-report.md >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jfr-report
+          path: jfr-report.md

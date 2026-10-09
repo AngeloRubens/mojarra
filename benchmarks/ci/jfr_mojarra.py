@@ -23,7 +23,8 @@ def frames(event):
     out = []
     for f in st.get("frames", []):
         m = f["method"]
-        out.append(m["type"]["name"] + "." + m["name"])
+        # JFR JSON uses internal names (com/sun/faces/Foo); hidden lambda classes keep dots.
+        out.append(m["type"]["name"].replace("/", ".") + "." + m["name"])
     return out
 
 
