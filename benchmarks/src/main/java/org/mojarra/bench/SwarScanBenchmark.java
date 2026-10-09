@@ -64,6 +64,7 @@ public class SwarScanBenchmark {
     private char[] chars;
     private byte[] bytes;
     private String string;
+    private final byte[] scratch = new byte[8192];
 
     @Setup
     public void setup() {
@@ -87,6 +88,7 @@ public class SwarScanBenchmark {
                 chars = savedChars.clone();
                 chars[pos] = hit;
                 bytes = new String(chars).getBytes(StandardCharsets.UTF_8);
+                string = new String(chars);
                 check("hit " + (int) hit + " at " + pos);
             }
         }
@@ -97,7 +99,8 @@ public class SwarScanBenchmark {
     private void check(String what) {
         int expected = scalarTable();
         if (autoVectorChars() != expected || swarBytes() != expected || swarBytes16() != expected
-                || (autoVectorFull() < 0) != (expected < length)) {
+                || (autoVectorFull() < 0) != (expected < length)
+                || intrinsicPlusSwarControls() != (expected < length)) {
             throw new IllegalStateException(what + ": scalar=" + expected + " autoVector=" + autoVectorChars() + " swar=" + swarBytes());
         }
     }
@@ -223,6 +226,37 @@ public class SwarScanBenchmark {
     public boolean intrinsicIndexOfPartial() {
         String s = string;
         return s.indexOf('<') >= 0 || s.indexOf('>') >= 0 || s.indexOf('&') >= 0;
+    }
+
+    /**
+     * Complete "needs escaping?" check built only from public APIs: three {@code String.indexOf} SIMD intrinsics for the
+     * specials, then the low byte of every char copied with {@link String#getBytes(int, int, byte[], int)} (a plain
+     * arraycopy for LATIN1 strings) and a one-operation-per-8-bytes SWAR test for control characters. The low-byte copy
+     * can only produce false positives (e.g. U+0101 -> 0x01), which merely route the string to the exact slow path.
+     */
+    @Benchmark
+    @SuppressWarnings("deprecation")
+    public boolean intrinsicPlusSwarControls() {
+        String s = string;
+        if (s.indexOf('<') >= 0 || s.indexOf('>') >= 0 || s.indexOf('&') >= 0) {
+            return true;
+        }
+        int n = s.length();
+        byte[] tmp = n <= scratch.length ? scratch : new byte[n];
+        s.getBytes(0, n, tmp, 0);
+        int i = 0;
+        for (; i + 8 <= n; i += 8) {
+            long x = (long) LONGS.get(tmp, i);
+            if (((x - SPACE) & ~x & HIGHS) != 0) {
+                return true;
+            }
+        }
+        for (; i < n; i++) {
+            if ((tmp[i] & 0xFF) < 0x20) {
+                return true;
+            }
+        }
+        return false;
     }
 
     private static long hasZero(long v) {
