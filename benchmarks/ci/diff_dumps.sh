@@ -5,7 +5,7 @@ set -uo pipefail
 a=$1 b=$2
 norm() {
     sed -E -e 's/(ViewState[^>]*value=")[^"]*/\1VS/g' -e 's/(ViewState:[0-9]+"><!\[CDATA\[)[^]]*/\1VS/g' \
-           -e 's/(ClientWindow[^>]*value=")[^"]*/\1CW/g' -e 's/nonce="[^"]*"/nonce="N"/g' "$1"
+           -e 's/(ClientWindow[^>]*value=")[^"]*/\1CW/g' -e 's/nonce="[^"]*"/nonce="N"/g' -e 's/;jsessionid=[A-Za-z0-9._-]*/;jsessionid=S/g' "$1"
 }
 status=0
 for f in "$a"/*; do
