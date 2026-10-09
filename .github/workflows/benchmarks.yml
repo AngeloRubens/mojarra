@@ -5,7 +5,8 @@ on:
     branches:
       - 'perf-*'
     paths:
-      - 'benchmarks/**'
+      - 'benchmarks/src/**'
+      - 'benchmarks/pom.xml'
       - 'impl/src/main/**'
       - '.github/workflows/benchmarks.yml'
   workflow_dispatch:
