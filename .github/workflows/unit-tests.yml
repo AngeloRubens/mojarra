@@ -24,7 +24,8 @@ jobs:
             argLine: '--add-modules jdk.incubator.vector'
           - name: jdk25-vector
             java: '25'
-            argLine: '--add-modules jdk.incubator.vector'
+            # Mockito 5.11's ByteBuddy does not officially support Java 25 class files yet.
+            argLine: '--add-modules jdk.incubator.vector -Dnet.bytebuddy.experimental=true'
     name: ${{ matrix.name }}
     steps:
       - uses: actions/checkout@v4
