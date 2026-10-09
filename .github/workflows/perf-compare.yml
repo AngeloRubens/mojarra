@@ -1,0 +1,115 @@
+name: Perf compare (baseline vs this branch)
+
+# Runs BalusC's test/perf bench three times on the same runner, so the arms are comparable:
+#   1. baseline   - Mojarra built from the baseline ref (default: main)
+#   2. defaults   - Mojarra built from this branch, no new options enabled
+#   3. all-on     - this branch with com.sun.faces.preRenderLiteralMarkup, com.sun.faces.utf8ResponseBuffer
+#                   and the Vector API module (--add-modules jdk.incubator.vector)
+# The harness itself (test/perf) is always taken from this branch.
+
+on:
+  push:
+    branches:
+      - 'perf-*'
+    paths:
+      - '.github/workflows/perf-compare.yml'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Baseline git ref'
+        required: false
+        default: 'main'
+      scenarios:
+        description: 'Comma-separated scenarios (empty = all)'
+        required: false
+        default: ''
+      warmup:
+        description: 'Warmup iterations per scenario'
+        required: false
+        default: '200'
+      runs:
+        description: 'Measured iterations per scenario'
+        required: false
+        default: '1000'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      BASELINE: ${{ github.event.inputs.baseline || 'main' }}
+      SCENARIOS: ${{ github.event.inputs.scenarios || '' }}
+      WARMUP: ${{ github.event.inputs.warmup || '200' }}
+      RUNS: ${{ github.event.inputs.runs || '1000' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install test base (and this branch's impl, overwritten next)
+        run: mvn -B -q -P '!glassfish' -pl impl,test/base -am clean install -DskipTests -Dmaven.javadoc.skip=true
+
+      # The baseline and this branch share the same -SNAPSHOT version: whichever impl was installed last is the one
+      # the bench bundles into its WAR.
+      - name: Install baseline impl
+        run: |
+          git worktree add "$RUNNER_TEMP/baseline" "origin/$BASELINE" || git worktree add "$RUNNER_TEMP/baseline" "$BASELINE"
+          mvn -B -q -f "$RUNNER_TEMP/baseline/pom.xml" -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
+
+      - name: Arm 1 - baseline
+        working-directory: test/perf
+        run: |
+          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
+          mkdir -p "$GITHUB_WORKSPACE/perf-out"
+          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/1-baseline.txt"
+
+      - name: Install this branch impl
+        run: mvn -B -q -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
+
+      - name: Arm 2 - this branch, defaults
+        working-directory: test/perf
+        run: |
+          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
+          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/2-defaults.txt"
+
+      - name: Arm 3 - this branch, all options on
+        working-directory: test/perf
+        run: |
+          WEB_XML=src/main/webapp/WEB-INF/web.xml
+          cp "$WEB_XML" "$RUNNER_TEMP/web.xml.orig"
+          sed -i 's#</web-app>#    <context-param><param-name>com.sun.faces.preRenderLiteralMarkup</param-name><param-value>true</param-value></context-param>\n    <context-param><param-name>com.sun.faces.utf8ResponseBuffer</param-name><param-value>true</param-value></context-param>\n</web-app>#' "$WEB_XML"
+          grep -n "preRenderLiteralMarkup\|utf8ResponseBuffer" "$WEB_XML"
+          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" \
+              -Dperf.jvmArguments="-Xmx1g --add-modules jdk.incubator.vector"
+          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/3-all-on.txt"
+          cp "$RUNNER_TEMP/web.xml.orig" "$WEB_XML"
+
+      - name: Summary
+        if: always()
+        run: |
+          cd perf-out
+          {
+            echo "## test/perf on Tomcat: baseline ($BASELINE) vs ${GITHUB_REF_NAME} — $(nproc) vCPU, $(lscpu | grep 'Model name' | sed 's/Model name: *//')"
+            echo
+            if [ -f 2-defaults.txt ]; then
+              python3 ../test/perf/perfreport.py 2-defaults.txt 1-baseline.txt --a-label "branch (defaults)" --b-label baseline \
+                  --title "Branch with defaults vs baseline" --out report-defaults.md && cat report-defaults.md
+            fi
+            echo
+            if [ -f 3-all-on.txt ]; then
+              python3 ../test/perf/perfreport.py 3-all-on.txt 1-baseline.txt --a-label "branch (all on)" --b-label baseline \
+                  --title "Branch with all options on vs baseline" --out report-all-on.md && cat report-all-on.md
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-compare
+          path: perf-out/
