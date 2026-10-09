@@ -52,6 +52,7 @@ public class EscapeBenchmark {
         try {
             check(textCurrent(), "text", () -> textProposed());
             check(attributeCurrent(), "attribute", () -> attributeProposed());
+            check(textCurrent(), "textNoCopy", () -> textProposedNoCopy());
         } catch (IOException e) {
             throw new IllegalStateException(e);
         }
@@ -80,6 +81,13 @@ public class EscapeBenchmark {
     public int textProposed() throws IOException {
         out.reset();
         ProposedHtmlUtils.writeText(out, text, buf);
+        return out.getBuffer().length();
+    }
+
+    @Benchmark
+    public int textProposedNoCopy() throws IOException {
+        out.reset();
+        ProposedHtmlUtils.writeTextNoCopy(out, text);
         return out.getBuffer().length();
     }
 

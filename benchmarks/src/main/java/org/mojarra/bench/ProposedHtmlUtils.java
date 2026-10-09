@@ -85,6 +85,37 @@ public final class ProposedHtmlUtils {
         }
     }
 
+    /**
+     * Variant of {@link #writeText(Writer, String, char[])} that never copies the String: safe runs are handed to
+     * {@code Writer.write(String, int, int)}, which a StringBuilder-backed writer appends with an arraycopy.
+     */
+    public static void writeTextNoCopy(Writer out, String text) throws IOException {
+        int len = text.length();
+        int runStart = 0;
+        for (int i = 0; i < len; i++) {
+            char ch = text.charAt(i);
+            if (ch >= 128 || TEXT_SAFE[ch]) {
+                continue;
+            }
+            if (i > runStart) {
+                out.write(text, runStart, i - runStart);
+            }
+            runStart = i + 1;
+            switch (ch) {
+                case '<' -> out.write(LT_CHARS);
+                case '>' -> out.write(GT_CHARS);
+                case '&' -> out.write(AMP_CHARS);
+                case 0x0C -> out.write(ch);
+                default -> { }
+            }
+        }
+        if (runStart == 0) {
+            out.write(text);
+        } else if (runStart < len) {
+            out.write(text, runStart, len - runStart);
+        }
+    }
+
     /** HTML attribute value, no ISO/Unicode escaping, script: guard enabled. */
     public static void writeAttribute(Writer out, String text, char[] buf) throws IOException {
         int len = text.length();
