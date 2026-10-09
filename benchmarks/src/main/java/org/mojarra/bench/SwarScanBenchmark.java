@@ -63,6 +63,7 @@ public class SwarScanBenchmark {
 
     private char[] chars;
     private byte[] bytes;
+    private String string;
 
     @Setup
     public void setup() {
@@ -72,6 +73,7 @@ public class SwarScanBenchmark {
             chars[i] = src.charAt(i % src.length());
         }
         bytes = new String(chars).getBytes(StandardCharsets.UTF_8);
+        string = new String(chars);
         verify();
     }
 
@@ -210,6 +212,17 @@ public class SwarScanBenchmark {
             acc |= (c - 0x20) | ((c ^ '<') - 1) | ((c ^ '>') - 1) | ((c ^ '&') - 1);
         }
         return acc;
+    }
+
+    /**
+     * JDK intrinsics: {@code String.indexOf(char)} is replaced by HotSpot with a hand-written SIMD stub (SSE4.2/AVX2/
+     * AVX-512) on LATIN1 strings. PARTIAL check: covers '<', '>' and '&' only, not control characters, so it measures
+     * the ceiling of an intrinsic-based fast path rather than a drop-in replacement.
+     */
+    @Benchmark
+    public boolean intrinsicIndexOfPartial() {
+        String s = string;
+        return s.indexOf('<') >= 0 || s.indexOf('>') >= 0 || s.indexOf('&') >= 0;
     }
 
     private static long hasZero(long v) {

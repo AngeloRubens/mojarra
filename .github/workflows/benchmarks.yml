@@ -18,6 +18,10 @@ on:
         description: 'Extra JMH arguments'
         required: false
         default: '-wi 3 -i 5 -f 2'
+      java:
+        description: 'JDK version used to run the benchmarks'
+        required: false
+        default: '21'
 
 jobs:
   jmh:
@@ -29,7 +33,7 @@ jobs:
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
-          java-version: '21'
+          java-version: ${{ github.event.inputs.java || '21' }}
           cache: maven
 
       - name: Build Mojarra impl
@@ -60,5 +64,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: jmh-result
+          name: jmh-result-jdk${{ github.event.inputs.java || '21' }}
           path: jmh-result.json
