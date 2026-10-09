@@ -94,7 +94,8 @@ public class SwarScanBenchmark {
 
     private void check(String what) {
         int expected = scalarTable();
-        if (autoVectorChars() != expected || swarBytes() != expected) {
+        if (autoVectorChars() != expected || swarBytes() != expected || swarBytes16() != expected
+                || (autoVectorFull() < 0) != (expected < length)) {
             throw new IllegalStateException(what + ": scalar=" + expected + " autoVector=" + autoVectorChars() + " swar=" + swarBytes());
         }
     }
@@ -159,6 +160,56 @@ public class SwarScanBenchmark {
             }
         }
         return n;
+    }
+
+    /**
+     * Unrolled SWAR: two longs (16 bytes) per iteration, one combined test; the exact position is resolved only on a
+     * hit.
+     */
+    @Benchmark
+    public int swarBytes16() {
+        byte[] b = bytes;
+        int n = b.length;
+        int i = 0;
+        for (; i + 16 <= n; i += 16) {
+            long m0 = flags((long) LONGS.get(b, i));
+            long m1 = flags((long) LONGS.get(b, i + 8));
+            if ((m0 | m1) != 0) {
+                return m0 != 0 ? i + (Long.numberOfTrailingZeros(m0) >>> 3) : i + 8 + (Long.numberOfTrailingZeros(m1) >>> 3);
+            }
+        }
+        for (; i + 8 <= n; i += 8) {
+            long m = flags((long) LONGS.get(b, i));
+            if (m != 0) {
+                return i + (Long.numberOfTrailingZeros(m) >>> 3);
+            }
+        }
+        for (; i < n; i++) {
+            int c = b[i];
+            if (c >= 0 && !SAFE[c]) {
+                return i;
+            }
+        }
+        return n;
+    }
+
+    private static long flags(long x) {
+        return ((x - SPACE) & ~x & HIGHS) | hasZero(x ^ LT) | hasZero(x ^ GT) | hasZero(x ^ AMP);
+    }
+
+    /**
+     * Whole-array branch-free reduction with no early exit at all: the most auto-vectorization-friendly shape. Only
+     * answers "is there anything to escape" (negative = yes), which is what the common clean-string fast path needs.
+     */
+    @Benchmark
+    public int autoVectorFull() {
+        char[] t = chars;
+        int acc = 0;
+        for (int j = 0; j < t.length; j++) {
+            int c = t[j];
+            acc |= (c - 0x20) | ((c ^ '<') - 1) | ((c ^ '>') - 1) | ((c ^ '&') - 1);
+        }
+        return acc;
     }
 
     private static long hasZero(long v) {
