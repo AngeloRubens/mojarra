@@ -60,7 +60,7 @@ final class UIInstructionHandler extends AbstractUIHandler {
         length = txt.toString().length();
 
         boolean literal = true;
-        int size = instructions.length;
+        int size = this.instructions.length;
 
         for (int i = 0; i < size; i++) {
             Instruction ins = this.instructions[i];

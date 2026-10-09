@@ -1,11 +1,11 @@
 name: Perf compare (baseline vs this branch)
 
-# Runs BalusC's test/perf bench three times on the same runner, so the arms are comparable:
-#   1. baseline   - Mojarra built from the baseline ref (default: main)
-#   2. defaults   - Mojarra built from this branch, no new options enabled
-#   3. all-on     - this branch with com.sun.faces.preRenderLiteralMarkup, com.sun.faces.utf8ResponseBuffer
-#                   and the Vector API module (--add-modules jdk.incubator.vector)
-# The harness itself (test/perf) is always taken from this branch.
+# Runs BalusC's test/perf bench on one runner in the symmetric order A B C C B A (so linear machine drift cancels):
+#   A - baseline: Mojarra built from the baseline ref (default: main)
+#   B - this branch, no new option enabled
+#   C - this branch with the chosen options (default: all of them)
+# then reports B and C against A, and checks that every response of B and C is identical to A's (view state ids,
+# client window ids and CSP nonces masked). The harness itself (test/perf) is always taken from this branch.
 
 on:
   push:
@@ -24,33 +24,28 @@ on:
         required: false
         default: ''
       warmup:
-        description: 'Warmup iterations per scenario'
+        description: 'Warmup iterations per scenario and arm run'
         required: false
         default: '200'
       runs:
-        description: 'Measured iterations per scenario'
+        description: 'Measured iterations per scenario and arm run (each arm runs twice)'
         required: false
         default: '1000'
       options:
-        description: 'Options enabled in arm 3 (space separated: prerender utf8 vector)'
+        description: 'Options enabled in arm C (space separated: prerender utf8 vector)'
         required: false
         default: 'prerender utf8 vector'
-      arms:
-        description: 'Arms to run (space separated: 1 2 3)'
-        required: false
-        default: '1 2 3'
 
 jobs:
   compare:
     runs-on: ubuntu-latest
-    timeout-minutes: 180
+    timeout-minutes: 240
     env:
       BASELINE: ${{ github.event.inputs.baseline || 'main' }}
       SCENARIOS: ${{ github.event.inputs.scenarios || '' }}
       WARMUP: ${{ github.event.inputs.warmup || '200' }}
       RUNS: ${{ github.event.inputs.runs || '1000' }}
       OPTIONS: ${{ github.event.inputs.options || 'prerender utf8 vector' }}
-      ARMS: ${{ github.event.inputs.arms || '1 2 3' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -62,74 +57,41 @@ jobs:
           java-version: '21'
           cache: maven
 
-      - name: Install test base (and this branch's impl, overwritten next)
-        run: mvn -B -q -P '!glassfish' -pl impl,test/base -am clean install -DskipTests -Dmaven.javadoc.skip=true
+      - name: Install test base
+        run: mvn -B -q -P '!glassfish' -pl impl,test/base -am install -DskipTests -Dmaven.javadoc.skip=true
 
-      # The baseline and this branch share the same -SNAPSHOT version: whichever impl was installed last is the one
-      # the bench bundles into its WAR.
-      - name: Install baseline impl
+      - name: Check out baseline
+        run: git worktree add "$RUNNER_TEMP/baseline" "origin/$BASELINE" || git worktree add "$RUNNER_TEMP/baseline" "$BASELINE"
+
+      - name: Run arms A B C C B A
+        env:
+          BASELINE_DIR: ${{ runner.temp }}/baseline
+          OUT: ${{ github.workspace }}/perf-out
+        run: benchmarks/ci/perf_compare.sh
+
+      - name: Responses identical to baseline
+        if: always()
         run: |
-          git worktree add "$RUNNER_TEMP/baseline" "origin/$BASELINE" || git worktree add "$RUNNER_TEMP/baseline" "$BASELINE"
-          mvn -B -q -f "$RUNNER_TEMP/baseline/pom.xml" -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
-
-      - name: Arm 1 - baseline
-        if: contains(env.ARMS, '1')
-        working-directory: test/perf
-        run: |
-          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
-          mkdir -p "$GITHUB_WORKSPACE/perf-out"
-          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/1-baseline.txt"
-
-      - name: Install this branch impl
-        run: mkdir -p perf-out &&  mvn -B -q -P '!glassfish' -pl impl -am clean install -DskipTests -Dmaven.javadoc.skip=true
-
-      - name: Arm 2 - this branch, defaults
-        if: contains(env.ARMS, '2')
-        working-directory: test/perf
-        run: |
-          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
-          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/2-defaults.txt"
-
-      - name: Arm 3 - this branch, options on
-        if: contains(env.ARMS, '3')
-        working-directory: test/perf
-        run: |
-          WEB_XML=src/main/webapp/WEB-INF/web.xml
-          cp "$WEB_XML" "$RUNNER_TEMP/web.xml.orig"
-          PARAMS=""
-          case " $OPTIONS " in *" prerender "*) PARAMS="$PARAMS<context-param><param-name>com.sun.faces.preRenderLiteralMarkup</param-name><param-value>true</param-value></context-param>";; esac
-          case " $OPTIONS " in *" utf8 "*) PARAMS="$PARAMS<context-param><param-name>com.sun.faces.utf8ResponseBuffer</param-name><param-value>true</param-value></context-param>";; esac
-          JVM_ARGS="-Xmx1g"
-          case " $OPTIONS " in *" vector "*) JVM_ARGS="$JVM_ARGS --add-modules jdk.incubator.vector";; esac
-          sed -i "s#</web-app>#    $PARAMS\n</web-app>#" "$WEB_XML"
-          tail -3 "$WEB_XML"
-          status=0
-          mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" \
-              -Dperf.jvmArguments="$JVM_ARGS" || status=$?
-          cp "$RUNNER_TEMP/web.xml.orig" "$WEB_XML"
-          if [ $status -ne 0 ]; then
-            echo "::group::Tomcat logs"
-            for f in target/apache-tomcat-*/logs/*; do echo "== $f"; grep -v "^\s*$" "$f" | grep -B2 -A40 -E "SEVERE|Exception" | head -150; done
-            echo "::endgroup::"
-            exit $status
-          fi
-          cp target/perf-stats-*.txt "$GITHUB_WORKSPACE/perf-out/3-all-on.txt"
+          b=0; c=0
+          echo "### B (defaults) vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-B || b=$?
+          echo "### C ($OPTIONS) vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-C || c=$?
+          [ $b -eq 0 ] && [ $c -eq 0 ]
 
       - name: Summary
         if: always()
         run: |
           cd perf-out
           {
-            echo "## test/perf on Tomcat: baseline ($BASELINE) vs ${GITHUB_REF_NAME} — $(nproc) vCPU, $(lscpu | grep 'Model name' | sed 's/Model name: *//')"
+            echo "## test/perf on Tomcat, A B C C B A: baseline ($BASELINE) vs ${GITHUB_REF_NAME} — $(nproc) vCPU, $(lscpu | grep 'Model name' | sed 's/Model name: *//')"
             echo
-            if [ -f 2-defaults.txt ]; then
-              python3 ../test/perf/perfreport.py 2-defaults.txt 1-baseline.txt --a-label "branch (defaults)" --b-label baseline \
-                  --title "Branch with defaults vs baseline" --out report-defaults.md && cat report-defaults.md
+            if [ -f B.txt ]; then
+              python3 ../test/perf/perfreport.py B.txt A.txt --a-label "B: branch (defaults)" --b-label "A: baseline" \
+                  --title "B: branch with defaults vs A: baseline" --out report-B.md && cat report-B.md
             fi
             echo
-            if [ -f 3-all-on.txt ]; then
-              python3 ../test/perf/perfreport.py 3-all-on.txt 1-baseline.txt --a-label "branch (all on)" --b-label baseline \
-                  --title "Branch with all options on vs baseline" --out report-all-on.md && cat report-all-on.md
+            if [ -f C.txt ]; then
+              python3 ../test/perf/perfreport.py C.txt A.txt --a-label "C: branch ($OPTIONS)" --b-label "A: baseline" \
+                  --title "C: branch with $OPTIONS vs A: baseline" --out report-C.md && cat report-C.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

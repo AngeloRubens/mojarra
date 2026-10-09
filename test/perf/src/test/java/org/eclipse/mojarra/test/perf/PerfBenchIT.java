@@ -67,6 +67,13 @@ class PerfBenchIT extends BaseIT {
     private static final int WARMUP = getInteger("perf.warmup", 50);
     private static final int RUNS = getInteger("perf.runs", 1000);
 
+    /**
+     * Optional {@code -Dperf.dumpDir=<dir>}: writes the first response body of every distinct GET, postback and ajax
+     * postback there, so that two builds' output can be diffed (e.g. to verify an optimization changes no byte).
+     */
+    private static final String DUMP_DIR = System.getProperty("perf.dumpDir", "").trim();
+    private static final Set<String> DUMPED = new LinkedHashSet<>();
+
     /** Skip the BaseIT ChromeDriver bootstrap — this bench drives the server with HttpClient. */
     @Override
     public void setup() {
@@ -398,6 +405,7 @@ class PerfBenchIT extends BaseIT {
         HttpRequest request = HttpRequest.newBuilder(URI.create(baseURL + path)).GET().build();
         HttpResponse<String> response = client.send(request, ofString(UTF_8));
         assertEquals(200, response.statusCode(), "GET " + path);
+        dump("get", path, response.body());
         return response.body();
     }
 
@@ -409,6 +417,7 @@ class PerfBenchIT extends BaseIT {
                 .build();
         HttpResponse<String> response = client.send(request, ofString(UTF_8));
         assertEquals(200, response.statusCode(), "POST " + form.action);
+        dump("post", form.action, response.body());
         return response.body();
     }
 
@@ -422,7 +431,20 @@ class PerfBenchIT extends BaseIT {
                 .build();
         HttpResponse<String> response = client.send(request, ofString(UTF_8));
         assertEquals(200, response.statusCode(), "AJAX " + form.action);
+        dump("ajax", form.action, response.body());
         return response.body();
+    }
+
+    private static void dump(String kind, String path, String body) throws IOException {
+        if (DUMP_DIR.isEmpty() || path.startsWith("perf-stats")) {
+            return;
+        }
+        String name = kind + "-" + path.replaceAll("[^A-Za-z0-9._-]", "_") + ".txt";
+        if (DUMPED.add(name)) {
+            Path dir = Path.of(DUMP_DIR);
+            Files.createDirectories(dir);
+            Files.writeString(dir.resolve(name), body, UTF_8);
+        }
     }
 
     private static String encodeForm(Map<String, String> fields) {
