@@ -113,6 +113,14 @@ public class ELContextImpl extends ELContext {
             return super.convertToType(obj, type);
         }
 
+        // What Expressly's and Tomcat's coercions return first, once no resolver converts: the most common case, an
+        // expression created with Object as expected type.
+        if (type == Object.class || obj != null && type.isInstance(obj)) {
+            @SuppressWarnings("unchecked")
+            T result = (T) obj;
+            return result;
+        }
+
         ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
         if (elManagerExpressionFactory == null || classLoader != elManagerClassLoader) {
             elManagerExpressionFactory = ELManager.getExpressionFactory();
