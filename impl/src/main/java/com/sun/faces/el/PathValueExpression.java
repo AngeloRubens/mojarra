@@ -144,16 +144,19 @@ final class PathValueExpression extends ValueExpression {
             }
 
             if (cache.reader != null) {
-                // What the BeanELResolver does before calling the getter.
-                context.setPropertyResolved(base, property);
+                Object value;
                 try {
-                    return cache.reader.apply(base);
+                    value = cache.reader.apply(base);
                 } catch (VirtualMachineError e) {
                     throw e;
                 } catch (Throwable e) {
                     // Let the BeanELResolver call it and wrap its exception.
                     return cache.beanResolver.getValue(context, base, property);
                 }
+                // Marked resolved after the call: Expressly's BeanELResolver does so too (Tomcat's before, which only
+                // differs for a throwing getter, handled above, and for evaluation listeners, which are delegated).
+                context.setPropertyResolved(base, property);
+                return value;
             }
         }
 
