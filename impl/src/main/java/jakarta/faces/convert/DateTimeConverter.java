@@ -779,7 +779,11 @@ public class DateTimeConverter implements Converter, PartialStateHolder {
             return new DateTimeFormatterBuilder().appendPattern(normalizedPattern);
         }
 
-        return new DateTimeFormatterBuilder().appendLocalized(dateStyle, timeStyle);
+        // The pattern appendLocalized(dateStyle, timeStyle) would look up on every format: the formatter has the ISO
+        // chronology and this locale, so the localized pattern is always this one. Appending it directly prints the
+        // same text without rebuilding a cache key and looking it up per value.
+        return new DateTimeFormatterBuilder()
+                .appendPattern(DateTimeFormatterBuilder.getLocalizedDateTimePattern(dateStyle, timeStyle, IsoChronology.INSTANCE, locale));
     }
 
     private static String normalizeWhitespace(CharSequence text) {

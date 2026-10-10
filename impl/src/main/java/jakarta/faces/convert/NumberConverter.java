@@ -27,6 +27,7 @@ import java.util.LinkedHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
 
 import jakarta.faces.component.PartialStateHolder;
@@ -690,6 +691,16 @@ public class NumberConverter implements Converter, PartialStateHolder {
             // conversion-heavy views (e.g. a per-row f:convertNumber unrolled by c:forEach).
             NumberFormat formatter = getCachedFormatter(context);
 
+            // Integers and BigDecimals are printed without DecimalFormat's synchronized StringBuffer, exactly as it
+            // prints them (see FastNumberFormat).
+            FastNumberFormat fast = getFastFormatter(context, formatter);
+            if (fast != null) {
+                String text = fast.format(value);
+                if (text != null) {
+                    return text;
+                }
+            }
+
             // Perform the requested formatting
             return formatter.format(value);
 
@@ -854,6 +865,29 @@ public class NumberConverter implements Converter, PartialStateHolder {
      * request, while a recurring working set stays cached. Normal views use only a handful of configurations.
      */
     private static final int FORMATTER_CACHE_LIMIT = 64;
+
+    /**
+     * The {@link FastNumberFormat}s of the configurations seen, shared by the whole application: a fast formatter is
+     * immutable and a function of the configuration only, which the formatter key covers entirely. Bounded.
+     */
+    private static final Map<String, Object> FAST_FORMATTERS = new ConcurrentHashMap<>();
+    private static final Object NO_FAST_FORMATTER = new Object();
+    private static final int FAST_FORMATTERS_LIMIT = 256;
+
+    private FastNumberFormat getFastFormatter(FacesContext context, NumberFormat formatter) {
+        String key = formatterKey(getLocale(context));
+        Object fast = FAST_FORMATTERS.get(key);
+        if (fast == null) {
+            fast = FastNumberFormat.of(formatter);
+            if (fast == null) {
+                fast = NO_FAST_FORMATTER;
+            }
+            if (FAST_FORMATTERS.size() < FAST_FORMATTERS_LIMIT) {
+                FAST_FORMATTERS.put(key, fast);
+            }
+        }
+        return fast == NO_FAST_FORMATTER ? null : (FastNumberFormat) fast;
+    }
 
     /** Bounded, access-ordered (LRU) formatter cache stored per {@link FacesContext}. */
     private static final class FormatterCache extends LinkedHashMap<String, NumberFormat> {
