@@ -16,24 +16,49 @@
 
 package com.sun.faces.el;
 
+import java.util.Arrays;
+
 import jakarta.el.CompositeELResolver;
 import jakarta.el.ELResolver;
 
 /**
- * The resolvers registered with {@link jakarta.faces.application.Application#addELResolver}. Knows whether it holds
- * any, so the Faces chain can skip it while it is empty.
+ * The resolvers registered with {@link jakarta.faces.application.Application#addELResolver} (Weld, for one, adds its
+ * own). Exposes them, so the Faces chain can apply its shortcut rules to each of them instead of treating the whole
+ * composite as an unknown resolver.
  */
 public class ApplicationELResolvers extends CompositeELResolver {
 
-    private volatile boolean empty = true;
+    private static final ELResolver[] NONE = {};
+
+    private volatile ELResolver[] resolvers = NONE;
+    private volatile boolean converting;
 
     @Override
-    public void add(ELResolver elResolver) {
+    public synchronized void add(ELResolver elResolver) {
         super.add(elResolver);
-        empty = false;
+        ELResolver[] grown = Arrays.copyOf(resolvers, resolvers.length + 1);
+        grown[resolvers.length] = elResolver;
+        resolvers = grown;
+        if (DemuxCompositeELResolver.declaresConvertToType(elResolver)) {
+            converting = true;
+        }
     }
 
     public boolean isEmpty() {
-        return empty;
+        return resolvers.length == 0;
+    }
+
+    /**
+     * @return the resolvers added so far, in order (the returned array must not be modified)
+     */
+    ELResolver[] getResolvers() {
+        return resolvers;
+    }
+
+    /**
+     * @return whether any resolver added so far may convert in {@link #convertToType}
+     */
+    boolean mayConvert() {
+        return converting;
     }
 }

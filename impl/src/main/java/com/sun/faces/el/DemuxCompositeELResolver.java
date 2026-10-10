@@ -23,6 +23,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Predicate;
 
 import com.sun.faces.context.flash.FlashELResolver;
 
@@ -163,7 +164,7 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         _convertELResolverCount++;
     }
 
-    private static boolean declaresConvertToType(ELResolver elResolver) {
+    static boolean declaresConvertToType(ELResolver elResolver) {
         try {
             return elResolver.getClass().getMethod("convertToType", ELContext.class, Object.class, Class.class).getDeclaringClass() != ELResolver.class;
         } catch (NoSuchMethodException e) {
@@ -392,7 +393,7 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
                 || type == StaticFieldELResolver.class // only resolves an ELClass base
                 || type == EmptyStringToNullELResolver.class
                 || isStreamResolver(type)
-                || isEmptyApplicationComposite(resolver);
+                || isApplicationComposite(resolver, child -> neverResolvesRootName(child, name));
     }
 
     /**
@@ -409,7 +410,7 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
             return !Flash.class.isAssignableFrom(baseClass);
         }
         if (type == CompositeComponentELResolver.class || type == EmptyStringToNullELResolver.class || isStreamResolver(type)
-                || isEmptyApplicationComposite(resolver)) {
+                || isApplicationComposite(resolver, child -> neverResolvesProperty(child, baseClass))) {
             return true;
         }
         if (type == CompositeComponentAttributesELResolver.class) {
@@ -454,8 +455,20 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         return name.equals("org.apache.el.stream.StreamELResolverImpl") || name.equals("org.glassfish.expressly.stream.StreamELResolver");
     }
 
-    private static boolean isEmptyApplicationComposite(ELResolver resolver) {
-        return resolver instanceof ApplicationELResolvers && ((ApplicationELResolvers) resolver).isEmpty();
+    /**
+     * Whether the resolver is the composite of the application resolvers and all of them satisfy the given rule (as
+     * when it is empty).
+     */
+    private static boolean isApplicationComposite(ELResolver resolver, Predicate<ELResolver> never) {
+        if (resolver.getClass() != ApplicationELResolvers.class) {
+            return false;
+        }
+        for (ELResolver child : ((ApplicationELResolvers) resolver).getResolvers()) {
+            if (!never.test(child)) {
+                return false;
+            }
+        }
+        return true;
     }
 
     private Class<?> _getType(int resolverCount, ELResolver[] resolvers, ELContext context, Object base, Object property) throws ELException {
@@ -567,7 +580,8 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
 
     /**
      * Whether {@link #convertToType} certainly declines to convert <code>obj</code>: all resolvers that can convert are
-     * the {@link OptionalELResolver}, which only converts an {@link Optional}, and empty application resolver composites.
+     * the {@link OptionalELResolver}, which only converts an {@link Optional}, and application resolver composites holding
+     * no resolver that declares <code>convertToType</code>.
      *
      * @param obj the object to convert
      * @return <code>true</code> when no resolver of this chain would convert <code>obj</code>
@@ -578,7 +592,7 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         }
 
         for (ApplicationELResolvers resolvers : _applicationConvertResolvers) {
-            if (!resolvers.isEmpty()) {
+            if (resolvers.mayConvert()) {
                 return false;
             }
         }

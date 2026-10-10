@@ -21,6 +21,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 
 import jakarta.el.ELContext;
 import jakarta.el.ELResolver;
@@ -42,6 +43,10 @@ public final class PathExpressionFactory extends ExpressionFactory {
     /** EL reserved words: never a name or a property in a valid expression of this form. */
     private static final Set<String> RESERVED = Set.of("and", "or", "not", "eq", "ne", "lt", "gt", "le", "ge", "true", "false", "null", "instanceof",
             "empty", "div", "mod", "cat");
+
+    private static final Map<String, Object> PATHS = new ConcurrentHashMap<>();
+    private static final Object NOT_A_PATH = new Object();
+    private static final int MAX_PATHS = 10_000;
 
     private final ExpressionFactory wrapped;
 
@@ -68,15 +73,33 @@ public final class PathExpressionFactory extends ExpressionFactory {
     public ValueExpression createValueExpression(ELContext context, String expression, Class<?> expectedType) {
         ValueExpression created = wrapped.createValueExpression(context, expression, expectedType);
 
-        List<String> path = parsePath(expression);
+        String[] path = cachedPath(expression);
         if (path == null) {
             return created;
         }
 
-        String name = path.get(0);
+        String name = path[0];
         VariableMapper variables = context == null ? null : context.getVariableMapper();
         ValueExpression variable = variables == null ? null : variables.resolveVariable(name);
-        return new PathValueExpression(created, name, path.subList(1, path.size()).toArray(new String[0]), expectedType, variable);
+        return new PathValueExpression(created, name, path, expectedType, variable);
+    }
+
+    /**
+     * Expressions are created again and again (on every build of a dynamic tree, in every c:forEach iteration), so the
+     * parsed form of each expression string is remembered, like the EL implementation remembers its syntax tree.
+     *
+     * @return the name followed by the properties, or <code>null</code>
+     */
+    private static String[] cachedPath(String expression) {
+        Object path = PATHS.get(expression);
+        if (path == null) {
+            List<String> parsed = parsePath(expression);
+            path = parsed == null ? NOT_A_PATH : parsed.toArray(new String[0]);
+            if (PATHS.size() < MAX_PATHS) {
+                PATHS.put(expression, path);
+            }
+        }
+        return path == NOT_A_PATH ? null : (String[]) path;
     }
 
     /**

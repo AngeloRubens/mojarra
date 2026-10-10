@@ -311,6 +311,34 @@ public class PathValueExpressionTest {
     }
 
     @Test
+    void knownApplicationResolversDoNotDisableTheShortcuts() {
+        // Weld adds its resolver through Application#addELResolver: known resolvers there must not act as barriers.
+        Roots roots = roots();
+        DemuxCompositeELResolver chain = new DemuxCompositeELResolver(FacesCompositeELResolver.ELResolverChainType.Faces);
+        ApplicationELResolvers application = new ApplicationELResolvers();
+        application.add(new MapELResolver());
+        chain.add(application);
+        chain.addPropertyELResolver(new OptionalELResolver());
+        chain.addPropertyELResolver(new BeanELResolver());
+        chain.addRootELResolver(roots);
+        assertSame(true, chain.beanReaders().get(Item.class).beanResolver() != null);
+        assertSame(null, chain.beanReaders().get(HashMap.class).beanResolver());
+        assertSame(true, chain.neverConverts("x"));
+
+        ELContext context = context(chain);
+        for (String expression : EXPRESSIONS) {
+            ValueExpression reference = EL.createValueExpression(context, expression, Object.class);
+            ValueExpression path = PATHS.createValueExpression(context, expression, Object.class);
+            assertEquals(outcome(reference, context), outcome(path, context), expression);
+        }
+
+        application.add(new ELContextConvertShortcutTest.Magic());
+        chain.clearShortcuts();
+        assertSame(false, chain.neverConverts("x"));
+        assertSame(null, chain.beanReaders().get(Item.class).beanResolver());
+    }
+
+    @Test
     void onlyPlainPathsAreWrapped() {
         ELContext context = context(chain(roots()));
         for (String expression : new String[] { "#{item.name}", "${item}", "#{a.b.c.d}", "#{_x.$y}" }) {

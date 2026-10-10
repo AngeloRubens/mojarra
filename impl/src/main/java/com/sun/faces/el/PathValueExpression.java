@@ -67,7 +67,7 @@ final class PathValueExpression extends ValueExpression {
 
     private final transient ValueExpression delegate;
     private final transient String name;
-    private final transient String[] properties;
+    private final transient String[] path;
     private final transient Class<?> expectedType;
     private final transient ValueExpression variable;
     private final transient ReaderCache[] readerCaches;
@@ -75,18 +75,18 @@ final class PathValueExpression extends ValueExpression {
     /**
      * @param delegate the expression created by the EL implementation
      * @param name the name
-     * @param properties the properties, possibly none
+     * @param path the name followed by the properties, possibly none (not copied, must not be modified)
      * @param expectedType the expected type the delegate was created with
      * @param variable the variable the variable mapper had for the name when the delegate was created, or
      * <code>null</code>
      */
-    PathValueExpression(ValueExpression delegate, String name, String[] properties, Class<?> expectedType, ValueExpression variable) {
+    PathValueExpression(ValueExpression delegate, String name, String[] path, Class<?> expectedType, ValueExpression variable) {
         this.delegate = delegate;
         this.name = name;
-        this.properties = properties;
+        this.path = path;
         this.expectedType = expectedType;
         this.variable = variable;
-        readerCaches = new ReaderCache[properties.length];
+        readerCaches = new ReaderCache[path.length];
     }
 
     ValueExpression getDelegate() {
@@ -113,8 +113,8 @@ final class PathValueExpression extends ValueExpression {
             }
         }
 
-        if (properties.length > 0) {
-            for (int i = 0; base != null && i < properties.length; i++) {
+        if (path.length > 1) {
+            for (int i = 1; base != null && i < path.length; i++) {
                 context.setPropertyResolved(false);
                 base = getProperty(context, resolver, base, i);
             }
@@ -131,7 +131,7 @@ final class PathValueExpression extends ValueExpression {
     }
 
     private Object getProperty(ELContext context, ELResolver resolver, Object base, int index) {
-        String property = properties[index];
+        String property = path[index];
 
         if (resolver instanceof DemuxCompositeELResolver) {
             ClassValue<BeanPropertyReaders> owner = ((DemuxCompositeELResolver) resolver).beanReaders();
