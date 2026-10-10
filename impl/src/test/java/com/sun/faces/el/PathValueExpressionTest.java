@@ -144,7 +144,8 @@ public class PathValueExpressionTest {
         }
     }
 
-    private static final ExpressionFactory EL = ExpressionFactory.newInstance();
+    // Expressly explicitly: Tomcat's EL, on the test classpath too, rejects #{item.class}
+    private static final ExpressionFactory EL = new org.glassfish.expressly.ExpressionFactoryImpl();
     private static final ExpressionFactory PATHS = PathExpressionFactory.wrap(EL);
 
     private static final String[] EXPRESSIONS = { "#{item}", "#{item.id}", "#{item.name}", "#{item.active}", "#{item.price}", "#{item.parent}",
