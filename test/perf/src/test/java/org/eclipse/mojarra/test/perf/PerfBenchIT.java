@@ -130,6 +130,7 @@ class PerfBenchIT extends BaseIT {
     private static final Map<String, String> GET_ONLY = only(Map.ofEntries(
             Map.entry("index", "index.xhtml"),
             Map.entry("table-readonly", "table-readonly.xhtml"),
+            Map.entry("table-large", "table-large.xhtml"),
             Map.entry("repeat-readonly", "repeat-readonly.xhtml"),
             Map.entry("composite-readonly", "composite-readonly.xhtml"),
             Map.entry("foreach-readonly", "foreach-readonly.xhtml"),
@@ -174,6 +175,7 @@ class PerfBenchIT extends BaseIT {
             "repeat-nested-ajax",
             "composite-nested-ajax",
             "foreach-nested-ajax",
+            "table-large-ajax",
             "dynamic-form-ajax",
             "dynamic-toggle-ajax"));
 

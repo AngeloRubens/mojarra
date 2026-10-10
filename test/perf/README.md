@@ -231,7 +231,7 @@ mvn clean verify -Dperf=true \
 
 Row data for the table/repeat/composite/foreach scenarios comes from one shared `DataBean`, sized by five
 constants — one per tier — so a whole tier is tuned by editing a single number: `READONLY_ROWS` (200),
-`INPUT_ROWS` (35), `FOREACH_ROWS` (100), nested `GROUPS`×`GROUP_ROWS` (5×10) and `WIDE_ROWS` (5). The rows themselves are
+`INPUT_ROWS` (35), `FOREACH_ROWS` (100), nested `GROUPS`×`GROUP_ROWS` (5×10), `WIDE_ROWS` (5) and `LARGE_ROWS` (1000). The rows themselves are
 realistic `Row` records (typed fields, a non-ASCII/HTML-metachar description exercising the slow escaping path).
 The two `dynamic-*` scenarios are sized by the `FIELD_COUNT` constant of their backing bean, and the flat forms
 by the shared `/WEB-INF/includes/form-fields.xhtml` field body. `index` and `viewparam-get` are intentionally
@@ -262,7 +262,7 @@ Five component families each span up to six variants. The family fixes the *stru
 | **foreach** | `c:forEach items` (build-time unrolled) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 | **flat** | *none — unrolled sibling tags, plus the 200-column facet pair* | ✓ | - | - | ✓ | - | - |
 
-- **readonly** — GET render, outputs only, no form: isolates fresh `buildView` + encode (no state restore). Sized by `READONLY_ROWS` (200); `foreach-readonly` by `FOREACH_ROWS` (100).
+- **readonly** — GET render, outputs only, no form: isolates fresh `buildView` + encode (no state restore). Sized by `READONLY_ROWS` (200); `foreach-readonly` by `FOREACH_ROWS` (100). `table-large` renders a ten-column table over `LARGE_ROWS` (1000), and `table-large-ajax` re-renders that same table through an ajax postback (`execute="@this" render="table"`), so state restore and partial-response encode of a large table are measured too.
 - **inputs** — full postback, per-row inputs + managed converters/validators (`INPUT_ROWS`, 35): full lifecycle over a flat iteration.
 - **nested** — full postback, the iterator inside itself two levels deep with per-row inputs (`GROUPS`×`GROUP_ROWS`, 5×10): isolates per-row child-state save/restore.
 - **build** — full postback of a **readonly** (no-input) tree: empty ARV/PV/UMV, so it isolates the state-**restore** path + encode from any input processing — the representative postback cost for readonly content. `table-build`/`repeat-build` re-post the standard readonly tree (`READONLY_ROWS`); `composite-build` (the #4811 all-NamingContainer case) and `foreach-build` (flat unrolled outputs) are the `c:forEach`-built trees (`FOREACH_ROWS`, delta-free restore); `flat-build` re-posts the `flat-readonly` tree, the only one built without an iterating construct.
