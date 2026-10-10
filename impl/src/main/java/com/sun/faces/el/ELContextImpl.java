@@ -25,9 +25,11 @@ import java.util.Map;
 import com.sun.faces.config.InitFacesContext;
 
 import jakarta.el.ELContext;
+import jakarta.el.ELManager;
 import jakarta.el.ELResolver;
 import jakarta.el.ExpressionFactory;
 import jakarta.el.FunctionMapper;
+import jakarta.el.LambdaExpression;
 import jakarta.el.ValueExpression;
 import jakarta.el.VariableMapper;
 import jakarta.faces.component.UIViewRoot;
@@ -44,6 +46,10 @@ public class ELContextImpl extends ELContext {
     private FunctionMapper functionMapper = new NoopFunctionMapper();
     private VariableMapper variableMapper;
     private final ELResolver resolver;
+
+    /** {@link ELManager#getExpressionFactory()} and the context class loader it was looked up for. */
+    private ExpressionFactory elManagerExpressionFactory;
+    private ClassLoader elManagerClassLoader;
 
     // ------------------------------------------------------------ Constructors
 
@@ -92,6 +98,28 @@ public class ELContextImpl extends ELContext {
     @Override
     public ELResolver getELResolver() {
         return resolver;
+    }
+
+    /**
+     * Same as {@link ELContext#convertToType}, which first asks the resolver chain and then coerces with
+     * {@link ELManager#getExpressionFactory()}. When the Faces chain certainly declines (see
+     * {@link DemuxCompositeELResolver#neverConverts}), it goes straight to the coercion, and the factory, which the EL
+     * API looks up per context class loader in a synchronized cache on every call, is looked up once per class loader.
+     * Value expressions call this at the end of every evaluation.
+     */
+    @Override
+    public <T> T convertToType(Object obj, Class<T> type) {
+        if (obj instanceof LambdaExpression || !(resolver instanceof DemuxCompositeELResolver) || !((DemuxCompositeELResolver) resolver).neverConverts(obj)) {
+            return super.convertToType(obj, type);
+        }
+
+        ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
+        if (elManagerExpressionFactory == null || classLoader != elManagerClassLoader) {
+            elManagerExpressionFactory = ELManager.getExpressionFactory();
+            elManagerClassLoader = classLoader;
+        }
+
+        return elManagerExpressionFactory.coerceToType(obj, type);
     }
 
     // ---------------------------------------------------------- Public Methods

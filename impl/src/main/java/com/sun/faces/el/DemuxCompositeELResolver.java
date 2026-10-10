@@ -17,6 +17,7 @@
 
 package com.sun.faces.el;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -26,6 +27,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import com.sun.faces.context.flash.FlashELResolver;
 
 import jakarta.el.ArrayELResolver;
+import jakarta.el.BeanELResolver;
 import jakarta.el.ELClass;
 import jakarta.el.ELContext;
 import jakarta.el.ELException;
@@ -56,6 +58,14 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
     private int _propertyELResolverCount = 0;
     private int _allELResolverCount = 0;
     private int _convertELResolverCount = 0;
+
+    /*
+     * convertToType shortcut. Every value expression evaluation ends with ELContext.convertToType, which consults the
+     * convert resolvers. Usually these are only the OptionalELResolver, which converts nothing but an Optional, and the
+     * still empty Application#addELResolver composite, so the walk can be skipped when it certainly declines.
+     */
+    private int _unknownConvertResolverCount = 0;
+    private ApplicationELResolvers[] _applicationConvertResolvers = new ApplicationELResolvers[0];
 
     /*
      * getValue shortcuts. Most resolvers of the chain decide whether they resolve from the base class alone (property
@@ -132,6 +142,13 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
     private void _addConvertELResolver(ELResolver elResolver) {
         if (!declaresConvertToType(elResolver)) {
             return;
+        }
+
+        if (elResolver.getClass() == ApplicationELResolvers.class) {
+            _applicationConvertResolvers = Arrays.copyOf(_applicationConvertResolvers, _applicationConvertResolvers.length + 1);
+            _applicationConvertResolvers[_applicationConvertResolvers.length - 1] = (ApplicationELResolvers) elResolver;
+        } else if (elResolver.getClass() != OptionalELResolver.class) {
+            _unknownConvertResolverCount++;
         }
 
         // grow array, if necessary
@@ -315,6 +332,35 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         _rootStart.clear();
         // A fresh ClassValue drops every per-class start computed so far.
         _propertyStart = newPropertyStarts();
+        _beanReaders = newBeanReaders();
+    }
+
+    /*
+     * Bean property readers for PathValueExpression: when the first resolver that may resolve a property of a class is
+     * the BeanELResolver, the result is always the BeanELResolver's (it resolves every property of every base, or
+     * throws), so the expression can call the getter directly.
+     */
+    private volatile ClassValue<BeanPropertyReaders> _beanReaders = newBeanReaders();
+
+    private ClassValue<BeanPropertyReaders> newBeanReaders() {
+        return new ClassValue<>() {
+            @Override
+            protected BeanPropertyReaders computeValue(Class<?> baseClass) {
+                int start = computePropertyStart(baseClass);
+                ELResolver resolver = start < _propertyELResolverCount ? _propertyELResolvers[start] : null;
+                return new BeanPropertyReaders(baseClass, SHORTCUTS && resolver != null && resolver.getClass() == BeanELResolver.class ? resolver : null);
+            }
+        };
+    }
+
+    /**
+     * The current bean property readers per base class. A new instance is returned after {@link #clearShortcuts()}, so
+     * callers caching a reader can check that their cache is still current by identity.
+     *
+     * @return the bean property readers per base class
+     */
+    ClassValue<BeanPropertyReaders> beanReaders() {
+        return _beanReaders;
     }
 
     private ClassValue<Integer> newPropertyStarts() {
@@ -504,6 +550,10 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
     public <T> T convertToType(ELContext context, Object obj, Class<T> targetType) {
         context.setPropertyResolved(false);
 
+        if (neverConverts(obj)) {
+            return null;
+        }
+
         for (int i = 0; i < _convertELResolverCount; i++) {
             T value = _convertELResolvers[i].convertToType(context, obj, targetType);
 
@@ -513,6 +563,27 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         }
 
         return null;
+    }
+
+    /**
+     * Whether {@link #convertToType} certainly declines to convert <code>obj</code>: all resolvers that can convert are
+     * the {@link OptionalELResolver}, which only converts an {@link Optional}, and empty application resolver composites.
+     *
+     * @param obj the object to convert
+     * @return <code>true</code> when no resolver of this chain would convert <code>obj</code>
+     */
+    boolean neverConverts(Object obj) {
+        if (!SHORTCUTS || _unknownConvertResolverCount != 0 || obj instanceof Optional) {
+            return false;
+        }
+
+        for (ApplicationELResolvers resolvers : _applicationConvertResolvers) {
+            if (!resolvers.isEmpty()) {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     @Override
