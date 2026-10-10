@@ -90,6 +90,7 @@ jobs:
           path: |
             perf-out/
             mojarra.jfr
+            test/perf/target/apache-tomcat-*/logs/
 
       - name: Summary
         if: always()
