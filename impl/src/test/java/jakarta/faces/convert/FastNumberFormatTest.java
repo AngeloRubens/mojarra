@@ -135,7 +135,7 @@ class FastNumberFormatTest {
                 String text = fast.format(value);
                 if (text != null) {
                     covered++;
-                    assertEquals(format.format(value), text, () -> format.toPattern() + " " + format.getDecimalFormatSymbols().getLocale() + " "
+                    assertEquals(format.format(value), text, () -> format.toPattern() + " " + format.getPositivePrefix() + "|" + format.getDecimalFormatSymbols().getDecimalSeparator() + " "
                             + format.getRoundingMode() + " " + value + " (" + value.getClass().getSimpleName() + ")");
                 }
             }
