@@ -18,75 +18,41 @@ package com.sun.faces.el;
 
 import java.io.Serial;
 import java.util.List;
-import java.util.function.Function;
 
 import jakarta.el.ELContext;
-import jakarta.el.ELResolver;
 import jakarta.el.EvaluationListener;
 import jakarta.el.ValueExpression;
 import jakarta.el.ValueReference;
 
 /**
  * A value expression of the form <code>#{name}</code> or <code>#{name.property.property...}</code> -- the large
- * majority of the expressions of a page -- created by the EL implementation (the delegate) and evaluated here without
- * the EL interpreter, the same way the interpreter does it:
- * <ol>
- * <li>the name is a variable captured from the variable mapper when the expression was created, whose expression is
- * evaluated, or else it is resolved by the resolver chain with no base;
- * <li>each property is resolved by the resolver chain on the previous value, until a value is <code>null</code>;
- * <li>the result is converted to the expected type with {@link ELContext#convertToType}.
- * </ol>
- * In addition, when the Faces chain would resolve a property with the BeanELResolver, the getter is called directly,
- * with an inline cache of the reader for the last base class seen.
+ * majority of the expressions of a page -- created by the EL implementation (the delegate) and evaluated by a
+ * {@link PathNode} without the EL interpreter, then converted to the expected type with
+ * {@link ELContext#convertToType}, like the interpreter does.
  *
  * <p>
  * Everything else is delegated: lambda arguments shadowing the name, registered evaluation listeners, an unresolved
- * name or property (to throw the interpreter's own exception), and every other method. A getter that throws is called
- * once more through the BeanELResolver, so that its exception is wrapped exactly as the resolver wraps it. The
- * expression serializes as its delegate.
+ * name or property (to throw the interpreter's own exception), and every other method. The expression serializes as
+ * its delegate.
  */
 final class PathValueExpression extends ValueExpression {
 
     @Serial
     private static final long serialVersionUID = 1L;
 
-    /** A reader cached for one base class, valid as long as the chain's readers are the same instance. */
-    private static final class ReaderCache {
-        final Class<?> type;
-        final ClassValue<BeanPropertyReaders> owner;
-        final Function<Object, Object> reader;
-        final ELResolver beanResolver;
-
-        ReaderCache(Class<?> type, ClassValue<BeanPropertyReaders> owner, Function<Object, Object> reader, ELResolver beanResolver) {
-            this.type = type;
-            this.owner = owner;
-            this.reader = reader;
-            this.beanResolver = beanResolver;
-        }
-    }
-
     private final transient ValueExpression delegate;
-    private final transient String name;
-    private final transient String[] path;
+    private final transient PathNode node;
     private final transient Class<?> expectedType;
-    private final transient ValueExpression variable;
-    private final transient ReaderCache[] readerCaches;
 
     /**
      * @param delegate the expression created by the EL implementation
-     * @param name the name
-     * @param path the name followed by the properties, possibly none (not copied, must not be modified)
+     * @param node the path
      * @param expectedType the expected type the delegate was created with
-     * @param variable the variable the variable mapper had for the name when the delegate was created, or
-     * <code>null</code>
      */
-    PathValueExpression(ValueExpression delegate, String name, String[] path, Class<?> expectedType, ValueExpression variable) {
+    PathValueExpression(ValueExpression delegate, PathNode node, Class<?> expectedType) {
         this.delegate = delegate;
-        this.name = name;
-        this.path = path;
+        this.node = node;
         this.expectedType = expectedType;
-        this.variable = variable;
-        readerCaches = new ReaderCache[path.length];
     }
 
     ValueExpression getDelegate() {
@@ -97,70 +63,20 @@ final class PathValueExpression extends ValueExpression {
     @SuppressWarnings("unchecked")
     public <T> T getValue(ELContext context) {
         List<EvaluationListener> listeners = context.getEvaluationListeners();
-        if (listeners != null && !listeners.isEmpty() || context.isLambdaArgument(name)) {
+        if (listeners != null && !listeners.isEmpty() || context.isLambdaArgument(node.name())) {
             return delegate.getValue(context);
         }
 
-        ELResolver resolver = context.getELResolver();
-        Object base;
-        if (variable != null) {
-            base = variable.getValue(context);
-        } else {
-            context.setPropertyResolved(false);
-            base = resolver.getValue(context, null, name);
-            if (!context.isPropertyResolved()) {
-                return delegate.getValue(context);
-            }
-        }
-
-        if (path.length > 1) {
-            for (int i = 1; base != null && i < path.length; i++) {
-                context.setPropertyResolved(false);
-                base = getProperty(context, resolver, base, i);
-            }
-            if (!context.isPropertyResolved()) {
-                return delegate.getValue(context);
-            }
+        Object value = node.getValue(context, context.getELResolver());
+        if (value == PathNode.UNRESOLVED) {
+            return delegate.getValue(context);
         }
 
         if (expectedType != null) {
-            base = context.convertToType(base, expectedType);
+            value = context.convertToType(value, expectedType);
         }
 
-        return (T) base;
-    }
-
-    private Object getProperty(ELContext context, ELResolver resolver, Object base, int index) {
-        String property = path[index];
-
-        if (resolver instanceof DemuxCompositeELResolver) {
-            ClassValue<BeanPropertyReaders> owner = ((DemuxCompositeELResolver) resolver).beanReaders();
-            Class<?> type = base.getClass();
-            ReaderCache cache = readerCaches[index];
-            if (cache == null || cache.type != type || cache.owner != owner) {
-                BeanPropertyReaders readers = owner.get(type);
-                cache = new ReaderCache(type, owner, readers.reader(property), readers.beanResolver());
-                readerCaches[index] = cache;
-            }
-
-            if (cache.reader != null) {
-                Object value;
-                try {
-                    value = cache.reader.apply(base);
-                } catch (VirtualMachineError e) {
-                    throw e;
-                } catch (Throwable e) {
-                    // Let the BeanELResolver call it and wrap its exception.
-                    return cache.beanResolver.getValue(context, base, property);
-                }
-                // Marked resolved after the call: Expressly's BeanELResolver does so too (Tomcat's before, which only
-                // differs for a throwing getter, handled above, and for evaluation listeners, which are delegated).
-                context.setPropertyResolved(base, property);
-                return value;
-            }
-        }
-
-        return resolver.getValue(context, base, property);
+        return (T) value;
     }
 
     @Override

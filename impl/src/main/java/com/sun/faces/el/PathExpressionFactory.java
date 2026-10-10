@@ -32,26 +32,31 @@ import jakarta.el.VariableMapper;
 
 /**
  * Wraps the EL implementation's expression factory so that value expressions of the form <code>#{name}</code> or
- * <code>#{name.property...}</code> are evaluated by {@link PathValueExpression}. Everything is created by the wrapped
- * factory first, so syntax errors and every other expression are exactly the wrapped factory's. Set the system property
- * <code>com.sun.faces.disablePathExpressions=true</code> to not wrap.
+ * <code>#{name.property...}</code> are evaluated by {@link PathValueExpression}, and those made of paths, literals and
+ * operators by {@link OperatorValueExpression}. Everything is created by the wrapped factory first, so syntax errors and
+ * every other expression are exactly the wrapped factory's. Set the system property
+ * <code>com.sun.faces.disablePathExpressions=true</code> to not wrap, or
+ * <code>com.sun.faces.disableOperatorExpressions=true</code> to only wrap paths.
  */
 public final class PathExpressionFactory extends ExpressionFactory {
 
     private static final boolean ENABLED = !Boolean.getBoolean("com.sun.faces.disablePathExpressions");
+    private static final boolean OPERATORS = !Boolean.getBoolean("com.sun.faces.disableOperatorExpressions");
 
     /** EL reserved words: never a name or a property in a valid expression of this form. */
     private static final Set<String> RESERVED = Set.of("and", "or", "not", "eq", "ne", "lt", "gt", "le", "ge", "true", "false", "null", "instanceof",
             "empty", "div", "mod", "cat");
 
-    private static final Map<String, Object> PATHS = new ConcurrentHashMap<>();
-    private static final Object NOT_A_PATH = new Object();
-    private static final int MAX_PATHS = 10_000;
+    private static final Map<String, Object> FORMS = new ConcurrentHashMap<>();
+    private static final Object OTHER = new Object();
+    private static final int MAX_FORMS = 10_000;
 
     private final ExpressionFactory wrapped;
+    private final OperatorValueExpression.Fallbacks fallbacks;
 
     private PathExpressionFactory(ExpressionFactory wrapped) {
         this.wrapped = wrapped;
+        fallbacks = new OperatorValueExpression.Fallbacks(wrapped);
     }
 
     /**
@@ -73,33 +78,47 @@ public final class PathExpressionFactory extends ExpressionFactory {
     public ValueExpression createValueExpression(ELContext context, String expression, Class<?> expectedType) {
         ValueExpression created = wrapped.createValueExpression(context, expression, expectedType);
 
-        String[] path = cachedPath(expression);
-        if (path == null) {
+        Object form = cachedForm(expression);
+        if (form == OTHER) {
             return created;
         }
 
-        String name = path[0];
         VariableMapper variables = context == null ? null : context.getVariableMapper();
-        ValueExpression variable = variables == null ? null : variables.resolveVariable(name);
-        return new PathValueExpression(created, name, path, expectedType, variable);
+        if (form instanceof String[]) {
+            String[] path = (String[]) form;
+            ValueExpression variable = variables == null ? null : variables.resolveVariable(path[0]);
+            return new PathValueExpression(created, new PathNode(path, variable), expectedType);
+        }
+        return OperatorValueExpression.create(created, (OperatorValueExpression.Node) form, variables, fallbacks, expectedType);
     }
 
     /**
      * Expressions are created again and again (on every build of a dynamic tree, in every c:forEach iteration), so the
      * parsed form of each expression string is remembered, like the EL implementation remembers its syntax tree.
      *
-     * @return the name followed by the properties, or <code>null</code>
+     * @return the name followed by the properties, a node template, or {@link #OTHER}
      */
-    private static String[] cachedPath(String expression) {
-        Object path = PATHS.get(expression);
-        if (path == null) {
-            List<String> parsed = parsePath(expression);
-            path = parsed == null ? NOT_A_PATH : parsed.toArray(new String[0]);
-            if (PATHS.size() < MAX_PATHS) {
-                PATHS.put(expression, path);
+    private static Object cachedForm(String expression) {
+        Object form = FORMS.get(expression);
+        if (form == null) {
+            List<String> path = parsePath(expression);
+            if (path != null) {
+                form = path.toArray(new String[0]);
+            } else {
+                form = OPERATORS ? OperatorValueExpression.Parser.parse(expression) : null;
+                if (form == null) {
+                    form = OTHER;
+                }
+            }
+            if (FORMS.size() < MAX_FORMS) {
+                FORMS.put(expression, form);
             }
         }
-        return path == NOT_A_PATH ? null : (String[]) path;
+        return form;
+    }
+
+    static boolean isReserved(String identifier) {
+        return RESERVED.contains(identifier);
     }
 
     /**
