@@ -32,7 +32,7 @@ on:
         required: false
         default: '1000'
       options:
-        description: 'Options enabled in arm C (space separated: prerender utf8 vector)'
+        description: 'Options enabled in arm C (space separated: prerender utf8 vector nopath)'
         required: false
         default: 'prerender utf8 vector'
 
@@ -92,6 +92,10 @@ jobs:
             if [ -f C.txt ]; then
               python3 ../test/perf/perfreport.py C.txt A.txt --a-label "C: branch ($OPTIONS)" --b-label "A: baseline" \
                   --title "C: branch with $OPTIONS vs A: baseline" --out report-C.md && cat report-C.md
+            fi
+            echo
+            if [ -f A-1.txt ]; then
+              python3 ../benchmarks/ci/medians.py . | tee medians.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 

@@ -20,6 +20,7 @@ run_arm() { # $1 = arm name, $2 = round
         case " $OPTIONS " in *" prerender "*) params="$params<context-param><param-name>com.sun.faces.preRenderLiteralMarkup</param-name><param-value>true</param-value></context-param>";; esac
         case " $OPTIONS " in *" utf8 "*) params="$params<context-param><param-name>com.sun.faces.utf8ResponseBuffer</param-name><param-value>true</param-value></context-param>";; esac
         case " $OPTIONS " in *" vector "*) jvm="$jvm --add-modules jdk.incubator.vector";; esac
+        case " $OPTIONS " in *" nopath "*) jvm="$jvm -Dcom.sun.faces.disablePathExpressions=true -Dcom.sun.faces.disableELResolverShortcuts=true";; esac
         sed -i "s#</web-app>#    $params\n</web-app>#" "$WEB_XML"
     fi
     local dump=""

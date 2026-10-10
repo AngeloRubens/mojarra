@@ -72,8 +72,8 @@ public class PerfStatsServlet extends HttpServlet {
     private static void writeText(PrintWriter out, Map<String, Map<PhaseId, Snapshot>> data, Map<PhaseId, Snapshot> totals) {
         out.println("# Faces perf stats (times in microseconds)");
         out.println();
-        out.printf("%-22s %-26s %8s %12s %10s %10s %10s%n",
-                "scenario", "phase", "count", "total_us", "avg_us", "min_us", "max_us");
+        out.printf("%-22s %-26s %8s %12s %10s %10s %10s %10s %10s%n",
+                "scenario", "phase", "count", "total_us", "avg_us", "min_us", "max_us", "p50_us", "p90_us");
         out.println("--------------------------------------------------------------------------------------------------------");
 
         for (Map.Entry<String, Map<PhaseId, Snapshot>> scenarioEntry : data.entrySet()) {
@@ -84,14 +84,16 @@ public class PerfStatsServlet extends HttpServlet {
                 if (s == null) {
                     continue;
                 }
-                out.printf("%-22s %-26s %8d %12d %10d %10d %10d%n",
+                out.printf("%-22s %-26s %8d %12d %10d %10d %10d %10d %10d%n",
                         scenario,
                         phaseId.getName(),
                         s.count,
                         s.totalNanos / 1000,
                         s.avgNanos() / 1000,
                         s.minNanos / 1000,
-                        s.maxNanos / 1000);
+                        s.maxNanos / 1000,
+                        s.p50Nanos / 1000,
+                        s.p90Nanos / 1000);
             }
         }
 
