@@ -586,13 +586,24 @@ public class NumberConverter implements Converter, PartialStateHolder {
                 var origNegPrefix = dParser.getNegativePrefix();
                 var origNegSuffix = dParser.getNegativeSuffix();
 
-                boolean hasFixedWidthWhitespace = 
+                // A function of the configured symbols and affixes, i.e. of this converter's configuration and locale,
+                // so it is computed once per configuration rather than with five regex matchers per parsed value.
+                Map<String, Boolean> whitespaceCache = whitespaceCache(context);
+                String whitespaceKey = formatterKey(locale);
+                Boolean cachedHasFixedWidthWhitespace = whitespaceCache.get(whitespaceKey);
+                boolean hasFixedWidthWhitespace;
+                if (cachedHasFixedWidthWhitespace != null) {
+                    hasFixedWidthWhitespace = cachedHasFixedWidthWhitespace;
+                } else {
+                    hasFixedWidthWhitespace =
                         FIXED_WIDTH_WHITESPACE.matcher(String.valueOf(origGroupingSep)).matches() ||
                         // TODO: uncomment in Faces 5.0: FIXED_WIDTH_WHITESPACE.matcher(String.valueOf(origMonetaryGroupingSep)).matches() ||
                         FIXED_WIDTH_WHITESPACE.matcher(origPrefix).find() ||
                         FIXED_WIDTH_WHITESPACE.matcher(origSuffix).find() ||
                         FIXED_WIDTH_WHITESPACE.matcher(origNegPrefix).find() ||
                         FIXED_WIDTH_WHITESPACE.matcher(origNegSuffix).find();
+                    whitespaceCache.put(whitespaceKey, hasFixedWidthWhitespace);
+                }
 
                 if (hasFixedWidthWhitespace) {
                     var normalizedValue = normalizeWhitespace(value);
@@ -835,6 +846,8 @@ public class NumberConverter implements Converter, PartialStateHolder {
 
     private static final String PARSER_CACHE_KEY = "jakarta.faces.convert.NumberConverter.parsers";
 
+    private static final String WHITESPACE_CACHE_KEY = "jakarta.faces.convert.NumberConverter.fixedWidthWhitespace";
+
     /**
      * Upper bound on the per-FacesContext formatter cache, kept as an LRU so a view whose converters are all
      * differently configured (e.g. a per-row {@code pattern}) cannot retain an unbounded number of formatters for the
@@ -898,6 +911,32 @@ public class NumberConverter implements Converter, PartialStateHolder {
             cache.put(key, parser);
         }
         return parser;
+    }
+
+    /** Bounded, access-ordered (LRU) cache of whether a configuration's parser has fixed-width whitespace. */
+    private static final class WhitespaceCache extends LinkedHashMap<String, Boolean> {
+
+        private static final long serialVersionUID = 1L;
+
+        WhitespaceCache() {
+            super(16, 0.75f, true);
+        }
+
+        @Override
+        protected boolean removeEldestEntry(Map.Entry<String, Boolean> eldest) {
+            return size() > FORMATTER_CACHE_LIMIT;
+        }
+    }
+
+    private static Map<String, Boolean> whitespaceCache(FacesContext context) {
+        Map<Object, Object> attributes = context.getAttributes();
+        @SuppressWarnings("unchecked")
+        Map<String, Boolean> cache = (Map<String, Boolean>) attributes.get(WHITESPACE_CACHE_KEY);
+        if (cache == null) {
+            cache = new WhitespaceCache();
+            attributes.put(WHITESPACE_CACHE_KEY, cache);
+        }
+        return cache;
     }
 
     /** The bounded per-{@link FacesContext} formatter/parser cache stored under {@code cacheKey}, created on first use. */

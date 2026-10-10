@@ -1077,6 +1077,7 @@ public class ExternalContextImpl extends ExternalContext {
             } catch (IOException ignored) {
                 // Best-effort at teardown; a genuine write failure surfaces via the container.
             }
+            responseOutputWriter.recycle();
             responseOutputWriter = null;
         }
 
@@ -1254,6 +1255,43 @@ public class ExternalContextImpl extends ExternalContext {
          * Hand what is buffered to the container, without flushing the container itself.
          */
         abstract void drain() throws IOException;
+
+        /**
+         * Give the buffer back for the next request on this thread. Called at {@link ExternalContextImpl#release()},
+         * after {@link #drain()}; should this writer still be written to afterwards, it allocates a new buffer.
+         */
+        abstract void recycle();
+
+        // One buffer of each kind per thread, taken by a writer for its lifetime: a nested request on the same thread
+        // (e.g. an include) finds none and allocates its own, so a buffer is never shared by two live writers.
+        private static final ThreadLocal<char[]> RECYCLED_CHARS = new ThreadLocal<>();
+        private static final ThreadLocal<byte[]> RECYCLED_BYTES = new ThreadLocal<>();
+
+        static char[] takeChars() {
+            char[] chars = RECYCLED_CHARS.get();
+            if (chars == null) {
+                return new char[BUFFER_SIZE];
+            }
+            RECYCLED_CHARS.set(null);
+            return chars;
+        }
+
+        static void giveChars(char[] chars) {
+            RECYCLED_CHARS.set(chars);
+        }
+
+        static byte[] takeBytes() {
+            byte[] bytes = RECYCLED_BYTES.get();
+            if (bytes == null) {
+                return new byte[BUFFER_SIZE];
+            }
+            RECYCLED_BYTES.set(null);
+            return bytes;
+        }
+
+        static void giveBytes(byte[] bytes) {
+            RECYCLED_BYTES.set(bytes);
+        }
     }
 
     /**
@@ -1262,7 +1300,7 @@ public class ExternalContextImpl extends ExternalContext {
     private static final class CharResponseOutputWriter extends ResponseOutputWriter {
 
         private final Writer wrapped;
-        private final char[] buffer = new char[BUFFER_SIZE];
+        private char[] buffer = takeChars();
         private int count;
 
         private CharResponseOutputWriter(Writer wrapped) {
@@ -1271,6 +1309,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void write(char[] chars, int offset, int length) throws IOException {
+            if (buffer == null) {
+                buffer = new char[BUFFER_SIZE];
+            }
             if (length >= BUFFER_SIZE) {
                 drain();
                 wrapped.write(chars, offset, length);
@@ -1287,6 +1328,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void write(String string, int offset, int length) throws IOException {
+            if (buffer == null) {
+                buffer = new char[BUFFER_SIZE];
+            }
             if (length >= BUFFER_SIZE) {
                 drain();
                 wrapped.write(string, offset, length);
@@ -1326,6 +1370,15 @@ public class ExternalContextImpl extends ExternalContext {
             }
         }
 
+        @Override
+        void recycle() {
+            if (buffer != null) {
+                giveChars(buffer);
+                buffer = null;
+                count = 0;
+            }
+        }
+
     }
 
     /**
@@ -1336,7 +1389,7 @@ public class ExternalContextImpl extends ExternalContext {
     static final class Utf8ResponseOutputWriter extends ResponseOutputWriter {
 
         private final OutputStream wrapped;
-        private final byte[] buffer = new byte[BUFFER_SIZE];
+        private byte[] buffer = takeBytes();
         private int count;
         private char pendingHighSurrogate;
 
@@ -1346,6 +1399,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void write(int c) throws IOException {
+            if (buffer == null) {
+                buffer = new byte[BUFFER_SIZE];
+            }
             if (count > BUFFER_SIZE - 4) {
                 drain();
             }
@@ -1354,6 +1410,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void write(char[] chars, int offset, int length) throws IOException {
+            if (buffer == null) {
+                buffer = new byte[BUFFER_SIZE];
+            }
             int end = offset + length;
             int i = offset;
             while (i < end) {
@@ -1391,6 +1450,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void write(String string, int offset, int length) throws IOException {
+            if (buffer == null) {
+                buffer = new byte[BUFFER_SIZE];
+            }
             int end = offset + length;
             int i = offset;
             while (i < end) {
@@ -1466,6 +1528,9 @@ public class ExternalContextImpl extends ExternalContext {
 
         @Override
         public void close() throws IOException {
+            if (buffer == null) {
+                buffer = new byte[BUFFER_SIZE];
+            }
             if (pendingHighSurrogate != 0) {
                 pendingHighSurrogate = 0;
                 if (count > BUFFER_SIZE - 1) {
@@ -1487,6 +1552,15 @@ public class ExternalContextImpl extends ExternalContext {
         void drain() throws IOException {
             if (count > 0) {
                 wrapped.write(buffer, 0, count);
+                count = 0;
+            }
+        }
+
+        @Override
+        void recycle() {
+            if (buffer != null) {
+                giveBytes(buffer);
+                buffer = null;
                 count = 0;
             }
         }
