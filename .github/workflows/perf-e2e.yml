@@ -83,6 +83,14 @@ jobs:
               -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="-Xmx1g"
           cp target/perf-stats-*.txt $GITHUB_WORKSPACE/perf-out/myfaces.txt
 
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-e2e
+          path: |
+            perf-out/
+            mojarra.jfr
+
       - name: Summary
         if: always()
         run: |
@@ -100,14 +108,7 @@ jobs:
             if [ -f mojarra.jfr ]; then
               echo "## JFR: where Mojarra spends CPU and allocates"
               echo
-              python3 benchmarks/ci/jfr_mojarra.py mojarra.jfr 30 | tee perf-out/jfr-report.md
+              java benchmarks/ci/JfrMojarra.java mojarra.jfr 30 | tee perf-out/jfr-report.md
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: perf-e2e
-          path: |
-            perf-out/
-            mojarra.jfr

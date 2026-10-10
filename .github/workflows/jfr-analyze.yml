@@ -6,7 +6,7 @@ on:
       - 'perf-*'
     paths:
       - '.github/workflows/jfr-analyze.yml'
-      - 'benchmarks/ci/jfr_mojarra.py'
+      - 'benchmarks/ci/JfrMojarra.java'
   workflow_dispatch:
     inputs:
       run_id:
@@ -51,7 +51,7 @@ jobs:
           {
             echo "## JFR analysis of run ${{ steps.run.outputs.id }}"
             echo
-            python3 benchmarks/ci/jfr_mojarra.py perf/mojarra.jfr 40
+            java benchmarks/ci/JfrMojarra.java perf/mojarra.jfr 40
           } | tee jfr-report.md >> "$GITHUB_STEP_SUMMARY"
 
       - uses: actions/upload-artifact@v4
