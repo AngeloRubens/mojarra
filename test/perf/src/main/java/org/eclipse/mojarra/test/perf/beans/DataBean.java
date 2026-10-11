@@ -25,9 +25,9 @@ import jakarta.inject.Named;
 
 /**
  * Row data for the table ({@code h:dataTable}), repeat ({@code ui:repeat}), composite and foreach
- * ({@code c:forEach items}) scenarios. Scenarios group into five size tiers, each a single tunable constant below:
+ * ({@code c:forEach items}) scenarios. Scenarios group into six size tiers, each a single tunable constant below:
  * {@link #getReadonlyRows() readonly} rows, {@link #getInputRows() input} rows (also the tier the flat forms match),
- * {@link #getForeachRows() foreach} rows, nested {@link #getGroups() groups}, and {@link #getWideRows() wide} rows.
+ * {@link #getForeachRows() foreach} rows, nested {@link #getGroups() groups}, {@link #getWideRows() wide} rows and {@link #getLargeRows() large} rows.
  * Each getter builds its list lazily so a view generates only the rows it renders.
  */
 @Named
@@ -42,6 +42,7 @@ public class DataBean implements Serializable {
     private static final int GROUPS = 5;
     private static final int GROUP_ROWS = 10;
     private static final int WIDE_ROWS = 5;
+    private static final int LARGE_ROWS = 1000;
 
     @Inject
     private RowFactory rowFactory;
@@ -51,6 +52,7 @@ public class DataBean implements Serializable {
     private List<Row> foreachRows;
     private List<Group> groups;
     private List<Row> wideRows;
+    private List<Row> largeRows;
 
     /** Readonly (outputs-only) table/repeat/composite rows, e.g. {@code #{dataBean.readonlyRows}}. */
     public List<Row> getReadonlyRows() {
@@ -77,6 +79,14 @@ public class DataBean implements Serializable {
             wideRows = rowFactory.generate(WIDE_ROWS);
         }
         return wideRows;
+    }
+
+    /** Rows of the large ten-column table ({@code table-large*}), e.g. {@code #{dataBean.largeRows}}. */
+    public List<Row> getLargeRows() {
+        if (largeRows == null) {
+            largeRows = rowFactory.generate(LARGE_ROWS);
+        }
+        return largeRows;
     }
 
     /** Rows the {@code foreach-*} {@code c:forEach} iterates, e.g. {@code #{dataBean.foreachRows}}. */
