@@ -15,6 +15,7 @@
  */
 package org.eclipse.mojarra.test.perf;
 
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.TreeMap;
@@ -38,10 +39,10 @@ public final class PerfStats {
     private PerfStats() {
     }
 
-    public void record(String scenario, PhaseId phaseId, long nanos) {
+    public void record(String scenario, PhaseId phaseId, long nanos, long allocatedBytes) {
         data.computeIfAbsent(scenario, k -> new ConcurrentHashMap<>())
             .computeIfAbsent(phaseId, k -> new Bucket())
-            .record(nanos);
+            .record(nanos, allocatedBytes);
     }
 
     public void reset() {
@@ -81,7 +82,7 @@ public final class PerfStats {
         Map<PhaseId, Snapshot> result = new HashMap<>();
         for (Map.Entry<PhaseId, long[]> e : agg.entrySet()) {
             long[] r = e.getValue();
-            result.put(e.getKey(), new Snapshot(r[0], r[1], r[2] == Long.MAX_VALUE ? 0 : r[2], r[3]));
+            result.put(e.getKey(), new Snapshot(r[0], r[1], r[2] == Long.MAX_VALUE ? 0 : r[2], r[3], 0, 0, 0));
         }
         return result;
     }
@@ -91,12 +92,32 @@ public final class PerfStats {
         private final LongAdder totalNanos = new LongAdder();
         private final AtomicLong minNanos = new AtomicLong(Long.MAX_VALUE);
         private final AtomicLong maxNanos = new AtomicLong(0);
+        private final LongAdder allocatedBytes = new LongAdder();
+        private long[] samples = new long[1024];
+        private int sampleCount;
 
-        void record(long nanos) {
+        void record(long nanos, long allocated) {
             count.increment();
+            allocatedBytes.add(allocated);
             totalNanos.add(nanos);
             minNanos.accumulateAndGet(nanos, Math::min);
             maxNanos.accumulateAndGet(nanos, Math::max);
+            synchronized (this) {
+                if (sampleCount == samples.length) {
+                    samples = Arrays.copyOf(samples, samples.length * 2);
+                }
+                samples[sampleCount++] = nanos;
+            }
+        }
+
+        /** Median and 90th percentile, which, unlike the average, a few GC or JIT pauses do not move. */
+        synchronized long[] percentiles() {
+            if (sampleCount == 0) {
+                return new long[] { 0, 0 };
+            }
+            long[] sorted = Arrays.copyOf(samples, sampleCount);
+            Arrays.sort(sorted);
+            return new long[] { sorted[(sorted.length - 1) / 2], sorted[(int) ((sorted.length - 1) * 0.9)] };
         }
 
         Snapshot snapshot() {
@@ -108,7 +129,8 @@ public final class PerfStats {
             long total = totalNanos.sum();
             long min = minNanos.get();
             long max = maxNanos.get();
-            return new Snapshot(c, total, min == Long.MAX_VALUE ? 0 : min, max);
+            long[] percentiles = percentiles();
+            return new Snapshot(c, total, min == Long.MAX_VALUE ? 0 : min, max, percentiles[0], percentiles[1], allocatedBytes.sum());
         }
     }
 
@@ -117,12 +139,23 @@ public final class PerfStats {
         public final long totalNanos;
         public final long minNanos;
         public final long maxNanos;
+        public final long p50Nanos;
+        public final long p90Nanos;
+        public final long allocatedBytes;
 
-        Snapshot(long count, long totalNanos, long minNanos, long maxNanos) {
+        Snapshot(long count, long totalNanos, long minNanos, long maxNanos, long p50Nanos, long p90Nanos, long allocatedBytes) {
             this.count = count;
             this.totalNanos = totalNanos;
             this.minNanos = minNanos;
             this.maxNanos = maxNanos;
+            this.p50Nanos = p50Nanos;
+            this.p90Nanos = p90Nanos;
+            this.allocatedBytes = allocatedBytes;
+        }
+
+        /** Average bytes allocated by the request thread during the phase. */
+        public long avgAllocatedBytes() {
+            return count == 0 ? 0 : allocatedBytes / count;
         }
 
         public long avgNanos() {
