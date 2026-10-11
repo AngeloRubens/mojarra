@@ -1,0 +1,79 @@
+name: Perf compare of two EL implementation builds
+
+on:
+  workflow_dispatch:
+    inputs:
+      el:
+        description: 'tomcat or expressly'
+        required: true
+        default: 'tomcat'
+      a_ref:
+        description: 'Baseline ref of AngeloRubens/tomcat, or "<expressly ref>,<expression-language ref>"'
+        required: true
+      b_ref:
+        description: 'Changed ref, same form as a_ref'
+        required: true
+      scenarios:
+        description: 'Comma separated scenarios (empty = all)'
+        required: false
+        default: ''
+      warmup:
+        required: false
+        default: '200'
+      runs:
+        required: false
+        default: '1000'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      EL: ${{ github.event.inputs.el }}
+      A_REF: ${{ github.event.inputs.a_ref }}
+      B_REF: ${{ github.event.inputs.b_ref }}
+      SCENARIOS: ${{ github.event.inputs.scenarios }}
+      WARMUP: ${{ github.event.inputs.warmup }}
+      RUNS: ${{ github.event.inputs.runs }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install test base
+        run: mvn -B -q -P '!glassfish' -pl impl,test/base -am install -DskipTests -Dmaven.javadoc.skip=true
+
+      - name: Run arms A B C C B A
+        env:
+          OUT: ${{ github.workspace }}/perf-out
+        run: benchmarks/ci/perf_el.sh
+
+      - name: Responses identical to baseline
+        if: always()
+        run: |
+          b=0; c=0
+          echo "### B vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-B || b=$?
+          echo "### C vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-C || c=$?
+          [ $b -eq 0 ] && [ $c -eq 0 ]
+
+      - name: Summary
+        if: always()
+        run: |
+          cd perf-out
+          {
+            echo "## test/perf on Tomcat with $EL: A ($A_REF) vs B ($B_REF) — $(nproc) vCPU"
+            echo
+            if [ -f A-1.txt ]; then python3 ../benchmarks/ci/medians.py . | tee medians.md; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-compare
+          path: |
+            perf-out/
+            test/perf/target/apache-tomcat-*/logs/

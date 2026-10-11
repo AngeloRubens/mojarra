@@ -93,6 +93,7 @@
              cross-server comparison is apples-to-apples. The webapp context-param knobs live in perf/pom.xml. -->
         <perf.heapSize>1g</perf.heapSize>
         <perf.jvmArguments>-Xmx${perf.heapSize}</perf.jvmArguments>
+        <perf.tomcatLib>${project.basedir}/no-tomcat-lib-overlay</perf.tomcatLib>
     </properties>
 
     <repositories>
@@ -763,6 +764,22 @@
                                             <includes>
                                                 <include>tomcat-users.xml</include>
                                             </includes>
+                                        </resource>
+                                    </resources>
+                                    <overwrite>true</overwrite>
+                                </configuration>
+                            </execution>
+                            <execution>
+                                <id>overlay-tomcat-lib</id> <!-- perf: jars replacing those of Tomcat's lib, e.g. another EL implementation. -->
+                                <phase>pre-integration-test</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <outputDirectory>${tomcat.dir}/lib</outputDirectory>
+                                    <resources>
+                                        <resource>
+                                            <directory>${perf.tomcatLib}</directory>
                                         </resource>
                                     </resources>
                                     <overwrite>true</overwrite>
