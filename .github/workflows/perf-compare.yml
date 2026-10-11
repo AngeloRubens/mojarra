@@ -1,0 +1,108 @@
+name: Perf compare (baseline vs this branch)
+
+# Runs BalusC's test/perf bench on one runner in the symmetric order A B C C B A (so linear machine drift cancels):
+#   A - baseline: Mojarra built from the baseline ref (default: main)
+#   B - this branch, no new option enabled
+#   C - this branch with the chosen options (default: all of them)
+# then reports B and C against A, and checks that every response of B and C is identical to A's (view state ids,
+# client window ids and CSP nonces masked). The harness itself (test/perf) is always taken from this branch.
+
+on:
+  push:
+    branches:
+      - 'perf-*'
+    paths:
+      - '.github/workflows/perf-compare.yml'
+  workflow_dispatch:
+    inputs:
+      baseline:
+        description: 'Baseline git ref'
+        required: false
+        default: 'main'
+      scenarios:
+        description: 'Comma-separated scenarios (empty = all)'
+        required: false
+        default: ''
+      warmup:
+        description: 'Warmup iterations per scenario and arm run'
+        required: false
+        default: '200'
+      runs:
+        description: 'Measured iterations per scenario and arm run (each arm runs twice)'
+        required: false
+        default: '1000'
+      options:
+        description: 'Options enabled in arm C (space separated: prerender utf8 vector nopath)'
+        required: false
+        default: 'prerender utf8 vector'
+
+jobs:
+  compare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    env:
+      BASELINE: ${{ github.event.inputs.baseline || 'main' }}
+      SCENARIOS: ${{ github.event.inputs.scenarios || '' }}
+      WARMUP: ${{ github.event.inputs.warmup || '200' }}
+      RUNS: ${{ github.event.inputs.runs || '1000' }}
+      OPTIONS: ${{ github.event.inputs.options || 'prerender utf8 vector' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Install test base
+        run: mvn -B -q -P '!glassfish' -pl impl,test/base -am install -DskipTests -Dmaven.javadoc.skip=true
+
+      - name: Check out baseline
+        run: git worktree add "$RUNNER_TEMP/baseline" "origin/$BASELINE" || git worktree add "$RUNNER_TEMP/baseline" "$BASELINE"
+
+      - name: Run arms A B C C B A
+        env:
+          BASELINE_DIR: ${{ runner.temp }}/baseline
+          OUT: ${{ github.workspace }}/perf-out
+        run: benchmarks/ci/perf_compare.sh
+
+      - name: Responses identical to baseline
+        if: always()
+        run: |
+          b=0; c=0
+          echo "### B (defaults) vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-B || b=$?
+          echo "### C ($OPTIONS) vs A"; benchmarks/ci/diff_dumps.sh perf-out/dump-A perf-out/dump-C || c=$?
+          [ $b -eq 0 ] && [ $c -eq 0 ]
+
+      - name: Summary
+        if: always()
+        run: |
+          cd perf-out
+          {
+            echo "## test/perf on Tomcat, A B C C B A: baseline ($BASELINE) vs ${GITHUB_REF_NAME} — $(nproc) vCPU, $(lscpu | grep 'Model name' | sed 's/Model name: *//')"
+            echo
+            if [ -f B.txt ]; then
+              python3 ../test/perf/perfreport.py B.txt A.txt --a-label "B: branch (defaults)" --b-label "A: baseline" \
+                  --title "B: branch with defaults vs A: baseline" --out report-B.md && cat report-B.md
+            fi
+            echo
+            if [ -f C.txt ]; then
+              python3 ../test/perf/perfreport.py C.txt A.txt --a-label "C: branch ($OPTIONS)" --b-label "A: baseline" \
+                  --title "C: branch with $OPTIONS vs A: baseline" --out report-C.md && cat report-C.md
+            fi
+            echo
+            if [ -f A-1.txt ]; then
+              python3 ../benchmarks/ci/medians.py . | tee medians.md
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: perf-compare
+          path: |
+            perf-out/
+            test/perf/target/apache-tomcat-*/logs/
