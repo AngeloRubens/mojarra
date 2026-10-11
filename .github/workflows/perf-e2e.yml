@@ -36,6 +36,14 @@ on:
         description: 'MyFaces version for the comparison arm'
         required: false
         default: '4.1.3'
+      el:
+        description: 'EL in Tomcat: empty = Tomcat as shipped, or tomcat / expressly built from el_ref (see build_el.sh)'
+        required: false
+        default: ''
+      el_ref:
+        description: 'Ref for el: a ref of AngeloRubens/tomcat, or "<expressly ref>,<expression-language ref>"'
+        required: false
+        default: ''
 
 jobs:
   perf:
@@ -60,13 +68,20 @@ jobs:
           WARMUP: ${{ github.event.inputs.warmup || '200' }}
           RUNS: ${{ github.event.inputs.runs || '2000' }}
           JFR: ${{ github.event_name == 'push' && 'true' || github.event.inputs.jfr }}
+          EL: ${{ github.event.inputs.el }}
+          EL_REF: ${{ github.event.inputs.el_ref }}
         run: |
           JVM_ARGS="-Xmx1g"
+          LIB="$GITHUB_WORKSPACE/no-tomcat-lib-overlay"
+          if [ -n "$EL" ]; then
+            LIB="$RUNNER_TEMP/el"
+            (cd "$GITHUB_WORKSPACE" && benchmarks/ci/build_el.sh "$EL" "$EL_REF" "$LIB")
+          fi
           if [ "$JFR" = "true" ]; then
             JVM_ARGS="$JVM_ARGS -XX:StartFlightRecording=filename=$GITHUB_WORKSPACE/mojarra.jfr,settings=profile,name=perf,dumponexit=true -XX:FlightRecorderOptions=stackdepth=256"
           fi
           mvn -B clean verify -Ptomcat -Dperf=true -Dperf.warmup="$WARMUP" -Dperf.runs="$RUNS" \
-              -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="$JVM_ARGS"
+              -Dperf.scenarios="$SCENARIOS" -Dperf.jvmArguments="$JVM_ARGS" -Dperf.tomcatLib="$LIB"
           mkdir -p $GITHUB_WORKSPACE/perf-out
           cp target/perf-stats-*.txt $GITHUB_WORKSPACE/perf-out/mojarra.txt
 
