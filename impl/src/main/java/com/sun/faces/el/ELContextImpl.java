@@ -51,6 +51,15 @@ public class ELContextImpl extends ELContext {
     private ExpressionFactory elManagerExpressionFactory;
     private ClassLoader elManagerClassLoader;
 
+    /**
+     * The last context objects looked up, by key identity: Weld asks for its creational context store on every
+     * evaluation, Mojarra for the FacesContext. Only {@link #putContext} changes the context objects, and it updates
+     * this cache.
+     */
+    private final Class<?>[] contextKeys = new Class<?>[4];
+    private final Object[] contextValues = new Object[4];
+    private int nextContextSlot;
+
     // ------------------------------------------------------------ Constructors
 
     /**
@@ -128,6 +137,34 @@ public class ELContextImpl extends ELContext {
         }
 
         return elManagerExpressionFactory.coerceToType(obj, type);
+    }
+
+    @Override
+    public Object getContext(Class<?> key) {
+        if (key != null) {
+            for (int i = 0; i < contextKeys.length; i++) {
+                if (contextKeys[i] == key) {
+                    return contextValues[i];
+                }
+            }
+        }
+
+        Object value = super.getContext(key);
+        int slot = nextContextSlot;
+        contextKeys[slot] = key;
+        contextValues[slot] = value;
+        nextContextSlot = (slot + 1) % contextKeys.length;
+        return value;
+    }
+
+    @Override
+    public void putContext(Class<?> key, Object contextObject) {
+        super.putContext(key, contextObject);
+        for (int i = 0; i < contextKeys.length; i++) {
+            if (contextKeys[i] == key) {
+                contextValues[i] = contextObject;
+            }
+        }
     }
 
     // ---------------------------------------------------------- Public Methods
