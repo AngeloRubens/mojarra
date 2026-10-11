@@ -114,6 +114,10 @@ class OperatorValueExpressionTest {
         try {
             Object value = expression.getValue(context);
             result = value == null ? "null" : value.getClass().getName() + ":" + Objects.toString(value);
+        } catch (NullPointerException e) {
+            // Once the JIT compiles the throwing code, the JVM may throw a preallocated instance without message
+            // (OmitStackTraceInFastThrow), whichever expression threw it.
+            result = "threw " + e.getClass().getName();
         } catch (RuntimeException e) {
             result = "threw " + e.getClass().getName() + ": " + e.getMessage() + " / " + (e.getCause() == null ? null : e.getCause().getClass().getName());
         }
