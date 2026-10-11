@@ -9,6 +9,8 @@ if [ "$impl" = tomcat ]; then
     git clone -q --depth 1 --branch "$refs" https://github.com/AngeloRubens/tomcat.git "$work/src"
     cd "$work/src"
     mkdir -p "$work/api" "$work/impl/META-INF"
+    # OSGi metadata only (bnd is not on the classpath here); the services file below registers the factory.
+    sed -i '/@aQute\.bnd\.annotation/d' java/org/apache/el/ExpressionFactoryImpl.java
     javac --release 17 -nowarn -encoding UTF-8 -d "$work/api" $(find java/jakarta/el -name '*.java')
     javac --release 17 -nowarn -encoding UTF-8 -cp "$work/api" -d "$work/impl" $(find java/org/apache/el -name '*.java')
     (cd java && find jakarta/el -name '*.properties' -exec cp --parents {} "$work/api" \;)
