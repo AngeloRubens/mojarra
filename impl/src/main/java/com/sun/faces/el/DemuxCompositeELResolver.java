@@ -446,6 +446,9 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
             return allChildren((ApplicationELResolvers) resolver, child -> neverResolvesRootName(child, name));
         }
         Class<?> type = resolver.getClass();
+        if (type == FacesResourceBundleELResolver.class) {
+            return true; // measurement only
+        }
         if (type == CompositeComponentELResolver.class) {
             return !CompositeComponentELResolver.COMPOSITE_COMPONENT_NAME.equals(name);
         }
