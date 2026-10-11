@@ -68,3 +68,49 @@ ta = (total.get("A1", 0) + total.get("A2", 0)) / 2
 tb = (total.get("B1", 0) + total.get("B2", 0)) / 2
 tc = (total.get("C1", 0) + total.get("C2", 0)) / 2
 print(f"| **TOTAL** | " + " | ".join(str(total[k]) for k in cols) + f" | {delta(tb, ta)} | {delta(tc, ta) if tc else '-'} | | |")
+
+
+def read_alloc(path):
+    """-> {scenario: bytes allocated per request (sum over phases of the per-phase average)} or None"""
+    rows = {}
+    for line in open(path, encoding="utf-8"):
+        parts = line.split()
+        if len(parts) < 10 or parts[1] not in PHASES or parts[0] == "<TOTAL>":
+            continue
+        try:
+            rows[parts[0]] = rows.get(parts[0], 0) + int(parts[9])
+        except ValueError:
+            continue
+    return rows if rows and any(rows.values()) else None
+
+
+allocs = {}
+for arm in "ABC":
+    for rnd in "12":
+        path = os.path.join(out, f"{arm}-{rnd}.txt")
+        if os.path.exists(path):
+            rows = read_alloc(path)
+            if rows:
+                allocs[arm + rnd] = rows
+
+
+def alloc_mean(arm, scenario):
+    vals = [allocs[arm + r][scenario] for r in "12" if arm + r in allocs and scenario in allocs[arm + r]]
+    return sum(vals) / len(vals) if vals else None
+
+
+if "A1" in allocs:
+    print()
+    print("### Bytes allocated per request by the request thread (exact, mean of the two rounds)")
+    print()
+    print("| scenario | A | B | C | B vs A | C vs A |")
+    print("|---|---:|---:|---:|---:|---:|")
+    ta = tb = tc = 0
+    for scenario in sorted(allocs["A1"]):
+        a, b, c = alloc_mean("A", scenario), alloc_mean("B", scenario), alloc_mean("C", scenario)
+        ta += a or 0
+        tb += b or 0
+        tc += c or 0
+        fmt = lambda v: "-" if v is None else f"{v / 1024:,.0f} KiB"
+        print(f"| {scenario} | {fmt(a)} | {fmt(b)} | {fmt(c)} | {delta(b, a)} | {delta(c, a)} |")
+    print(f"| **TOTAL** | {ta / 1024:,.0f} KiB | {tb / 1024:,.0f} KiB | {tc / 1024:,.0f} KiB | {delta(tb, ta)} | {delta(tc, ta) if tc else '-'} |")
