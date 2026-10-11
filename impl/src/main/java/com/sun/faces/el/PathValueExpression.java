@@ -42,21 +42,29 @@ final class PathValueExpression extends ValueExpression {
 
     private final transient ValueExpression delegate;
     private final transient PathNode node;
+    private final transient ValueExpression variable;
     private final transient Class<?> expectedType;
 
     /**
      * @param delegate the expression created by the EL implementation
-     * @param node the path
+     * @param node the path, shared by the expressions of the same expression string
+     * @param variable the variable the variable mapper had for the name when the delegate was created, or
+     * <code>null</code>
      * @param expectedType the expected type the delegate was created with
      */
-    PathValueExpression(ValueExpression delegate, PathNode node, Class<?> expectedType) {
+    PathValueExpression(ValueExpression delegate, PathNode node, ValueExpression variable, Class<?> expectedType) {
         this.delegate = delegate;
         this.node = node;
+        this.variable = variable;
         this.expectedType = expectedType;
     }
 
     ValueExpression getDelegate() {
         return delegate;
+    }
+
+    PathNode node() {
+        return node;
     }
 
     @Override
@@ -67,7 +75,7 @@ final class PathValueExpression extends ValueExpression {
             return delegate.getValue(context);
         }
 
-        Object value = node.getValue(context, context.getELResolver());
+        Object value = node.getValue(context, context.getELResolver(), variable);
         if (value == PathNode.UNRESOLVED) {
             return delegate.getValue(context);
         }

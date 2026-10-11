@@ -32,6 +32,11 @@ import jakarta.el.ValueExpression;
  * In addition, when the Faces chain would resolve a property with the BeanELResolver, the getter is called directly,
  * with an inline cache of the reader for the last base class seen. A getter that throws is called once more through
  * the BeanELResolver, so that its exception is wrapped exactly as the resolver wraps it.
+ *
+ * <p>
+ * A node is shared by every expression created from the same expression string -- Facelets creates the expressions of
+ * template text again on every build of the view -- so the inline cache serves them all, from any thread: its entries
+ * are immutable, and a concurrent replacement only costs another lookup. The variable is the expression's own.
  */
 final class PathNode {
 
@@ -55,18 +60,14 @@ final class PathNode {
 
     private final String name;
     private final String[] path;
-    private final ValueExpression variable;
     private final ReaderCache[] readerCaches;
 
     /**
      * @param path the name followed by the properties, possibly none (not copied, must not be modified)
-     * @param variable the variable the variable mapper had for the name when the expression was created, or
-     * <code>null</code>
      */
-    PathNode(String[] path, ValueExpression variable) {
+    PathNode(String[] path) {
         name = path[0];
         this.path = path;
-        this.variable = variable;
         readerCaches = new ReaderCache[path.length];
     }
 
@@ -79,9 +80,11 @@ final class PathNode {
     }
 
     /**
+     * @param variable the variable the variable mapper had for the name when the expression was created, or
+     * <code>null</code>
      * @return the value, or {@link #UNRESOLVED}
      */
-    Object getValue(ELContext context, ELResolver resolver) {
+    Object getValue(ELContext context, ELResolver resolver, ValueExpression variable) {
         Object base;
         if (variable != null) {
             base = variable.getValue(context);

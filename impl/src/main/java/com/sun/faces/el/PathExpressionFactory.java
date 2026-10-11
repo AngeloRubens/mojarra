@@ -84,10 +84,10 @@ public final class PathExpressionFactory extends ExpressionFactory {
         }
 
         VariableMapper variables = context == null ? null : context.getVariableMapper();
-        if (form instanceof String[]) {
-            String[] path = (String[]) form;
-            ValueExpression variable = variables == null ? null : variables.resolveVariable(path[0]);
-            return new PathValueExpression(created, new PathNode(path, variable), expectedType);
+        if (form instanceof PathNode) {
+            PathNode path = (PathNode) form;
+            ValueExpression variable = variables == null ? null : variables.resolveVariable(path.name());
+            return new PathValueExpression(created, path, variable, expectedType);
         }
         return OperatorValueExpression.create(created, (OperatorValueExpression.Node) form, variables, fallbacks, expectedType);
     }
@@ -96,14 +96,14 @@ public final class PathExpressionFactory extends ExpressionFactory {
      * Expressions are created again and again (on every build of a dynamic tree, in every c:forEach iteration), so the
      * parsed form of each expression string is remembered, like the EL implementation remembers its syntax tree.
      *
-     * @return the name followed by the properties, a node template, or {@link #OTHER}
+     * @return a path node shared by the expressions of this string, a node template, or {@link #OTHER}
      */
     private static Object cachedForm(String expression) {
         Object form = FORMS.get(expression);
         if (form == null) {
             List<String> path = parsePath(expression);
             if (path != null) {
-                form = path.toArray(new String[0]);
+                form = new PathNode(path.toArray(new String[0]));
             } else {
                 form = OPERATORS ? OperatorValueExpression.Parser.parse(expression) : null;
                 if (form == null) {

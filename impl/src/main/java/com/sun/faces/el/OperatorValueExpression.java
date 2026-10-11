@@ -372,15 +372,18 @@ final class OperatorValueExpression extends ValueExpression {
     }
 
     static final class Path extends Node {
+        /** Shared by the expressions of the same expression string, see {@link PathNode}. */
         final PathNode path;
+        final ValueExpression variable;
 
-        Path(PathNode path) {
+        Path(PathNode path, ValueExpression variable) {
             this.path = path;
+            this.variable = variable;
         }
 
         @Override
         Object getValue(ELContext context, ELResolver resolver) {
-            return path.getValue(context, resolver);
+            return path.getValue(context, resolver, variable);
         }
 
         @Override
@@ -389,7 +392,8 @@ final class OperatorValueExpression extends ValueExpression {
             if (!names.contains(name)) {
                 names.add(name);
             }
-            return new Path(new PathNode(path.path(), variables == null ? null : variables.resolveVariable(name)));
+            ValueExpression instanceVariable = variables == null ? null : variables.resolveVariable(name);
+            return instanceVariable == null ? this : new Path(path, instanceVariable);
         }
     }
 
@@ -819,7 +823,7 @@ final class OperatorValueExpression extends ValueExpression {
             if (next < end && (s.charAt(next) == '(' || s.charAt(next) == '[' || s.charAt(next) == '.')) {
                 throw UNSUPPORTED;
             }
-            return new Path(new PathNode(path.toArray(new String[0]), null));
+            return new Path(new PathNode(path.toArray(new String[0])), null);
         }
 
         private String identifier() {

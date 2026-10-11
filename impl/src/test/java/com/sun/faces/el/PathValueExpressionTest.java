@@ -358,6 +358,21 @@ public class PathValueExpressionTest {
     }
 
     @Test
+    void expressionsOfTheSameStringShareTheNodeButNotTheVariable() {
+        // Facelets creates the expressions of template text again on every build: they share one path node, and so
+        // its inline cache, while each keeps the variable its context had.
+        Roots roots = roots();
+        ELContext context = context(chain(roots));
+        ValueExpression first = PATHS.createValueExpression(context, "#{var.name}", Object.class);
+        context.getVariableMapper().setVariable("var", EL.createValueExpression(context, "#{item}", Object.class));
+        ValueExpression second = PATHS.createValueExpression(context, "#{var.name}", Object.class);
+        assertSame(((PathValueExpression) first).node(), ((PathValueExpression) second).node());
+        assertEquals("var", (Object) first.getValue(context));
+        assertEquals("item", (Object) second.getValue(context));
+        assertEquals("var", (Object) first.getValue(context));
+    }
+
+    @Test
     void serializesAsTheDelegate() throws Exception {
         ELContext context = context(chain(roots()));
         ValueExpression path = PATHS.createValueExpression(context, "#{item.name}", String.class);
