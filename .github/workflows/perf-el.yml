@@ -1,6 +1,11 @@
 name: Perf compare of two EL implementation builds
 
 on:
+  push:
+    branches:
+      - 'bench/el-impl'
+    paths:
+      - '.github/workflows/perf-el.yml'
   workflow_dispatch:
     inputs:
       el:
@@ -26,6 +31,7 @@ on:
 
 jobs:
   compare:
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 240
     env:
