@@ -15,6 +15,8 @@
  */
 package org.eclipse.mojarra.test.perf;
 
+import java.lang.management.ManagementFactory;
+
 import jakarta.faces.context.FacesContext;
 import jakarta.faces.event.PhaseEvent;
 import jakarta.faces.event.PhaseId;
@@ -29,6 +31,16 @@ public class PhaseTimingListener implements PhaseListener {
     private static final long serialVersionUID = 1L;
 
     private static final String START_KEY = "perf.phaseStart.";
+    private static final String ALLOCATED_KEY = "perf.phaseAllocated.";
+
+    /** Bytes allocated by the current thread, exact (not sampled); -1 when the JVM does not tell. */
+    private static long allocatedBytes() {
+        try {
+            return ((com.sun.management.ThreadMXBean) ManagementFactory.getThreadMXBean()).getCurrentThreadAllocatedBytes();
+        } catch (RuntimeException | LinkageError e) {
+            return -1;
+        }
+    }
 
     @Override
     public PhaseId getPhaseId() {
@@ -37,18 +49,22 @@ public class PhaseTimingListener implements PhaseListener {
 
     @Override
     public void beforePhase(PhaseEvent event) {
+        event.getFacesContext().getAttributes().put(ALLOCATED_KEY + event.getPhaseId().getOrdinal(), allocatedBytes());
         event.getFacesContext().getAttributes().put(key(event.getPhaseId()), System.nanoTime());
     }
 
     @Override
     public void afterPhase(PhaseEvent event) {
         long now = System.nanoTime();
+        long allocated = allocatedBytes();
         FacesContext context = event.getFacesContext();
         Object start = context.getAttributes().remove(key(event.getPhaseId()));
+        Object allocatedBefore = context.getAttributes().remove(ALLOCATED_KEY + event.getPhaseId().getOrdinal());
         if (!(start instanceof Long)) {
             return;
         }
-        PerfStats.INSTANCE.record(resolveScenario(context), event.getPhaseId(), now - (Long) start);
+        long bytes = allocatedBefore instanceof Long && (Long) allocatedBefore >= 0 && allocated >= 0 ? allocated - (Long) allocatedBefore : 0;
+        PerfStats.INSTANCE.record(resolveScenario(context), event.getPhaseId(), now - (Long) start, bytes);
     }
 
     private static String key(PhaseId phaseId) {
