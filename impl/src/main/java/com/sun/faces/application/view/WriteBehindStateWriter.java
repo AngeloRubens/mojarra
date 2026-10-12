@@ -21,6 +21,7 @@ import static java.lang.Boolean.TRUE;
 
 import java.io.IOException;
 import java.io.Writer;
+import java.util.Arrays;
 import java.util.Map;
 
 import com.sun.faces.RIConstants;
@@ -44,8 +45,9 @@ final class WriteBehindStateWriter extends Writer {
     private static final ThreadLocal<WriteBehindStateWriter> CUR_WRITER = new ThreadLocal<>();
     private Writer out;
     private final Writer orig;
-    private FastStringWriter fWriter;
+    private ChunkedWriter fWriter;
     private boolean stateWritten;
+    private int markersRequested;
     private final int bufSize;
     private final char[] buf;
     private final FacesContext context;
@@ -154,14 +156,16 @@ final class WriteBehindStateWriter extends Writer {
     }
 
     /**
-     * When called, the original writer is backed up and replaced with a new FastStringWriter. All content written after
+     * When called, the original writer is backed up and replaced with a new chunked buffer. All content written after
      * this method is called will then be buffered and written out later after the entire view has been rendered.
      */
     public void writingState() {
+        markersRequested++;
         if (!stateWritten) {
             stateWritten = true;
-            out = fWriter = new FastStringWriter(1024);
+            out = fWriter = new ChunkedWriter();
         }
+        fWriter.expectMarker();
     }
 
     /**
@@ -173,7 +177,7 @@ final class WriteBehindStateWriter extends Writer {
 
     /**
      * <p>
-     * Write directly from our FastStringWriter to the provided writer.
+     * Write directly from our buffer to the provided writer.
      * </p>
      *
      * @throws IOException if an error occurs
@@ -186,11 +190,30 @@ final class WriteBehindStateWriter extends Writer {
         StateManager stateManager = Util.getStateManager(context);
         ResponseWriter origWriter = context.getResponseWriter();
         StringBuilder stateBuilder = getState(stateManager, origWriter);
-        StringBuilder builder = fWriter.getBuffer();
+
+        if (!fWriter.markerMissed && fWriter.markerCount == markersRequested) {
+            // Each write following writingState() was exactly the marker, and no other write held a '~', so the markers
+            // are exactly at the recorded positions: write the buffered chunks straight to the response around them,
+            // without searching the content.
+            int pos = 0;
+            for (int i = 0; i < fWriter.markerCount; i++) {
+                int markerPos = fWriter.markers[i];
+                fWriter.writeTo(orig, pos, markerPos);
+                writeStateContent(stateBuilder);
+                pos = markerPos + STATE_MARKER_LEN;
+                stateBuilder = getState(stateManager, origWriter);
+            }
+            fWriter.writeTo(orig, pos, fWriter.length());
+            out = orig;
+            return;
+        }
+
+        // A write following writingState() was not exactly the marker (e.g. a buffering ResponseWriter wrapper split
+        // it): search the content for every marker text.
+        StringBuilder builder = fWriter.toStringBuilder();
 
         // Begin writing...
         int totalLen = builder.length();
-        int stateLen = stateBuilder.length();
         int pos = 0;
         int tildeIdx = getNextDelimiterIndex(builder, pos);
         while (pos < totalLen) {
@@ -210,28 +233,12 @@ final class WriteBehindStateWriter extends Writer {
                     // at the beginning of pos, if so, write our
                     // state out.
                     if (builder.indexOf(RIConstants.SAVESTATE_FIELD_MARKER, pos) == tildeIdx) {
-                        // buf is effectively zero'd out at this point
-                        int statePos = 0;
-                        while (statePos < stateLen) {
-                            if (stateLen - statePos > bufSize) {
-                                // enough state to fill the buffer
-                                stateBuilder.getChars(statePos, statePos + bufSize, buf, 0);
-                                orig.write(buf);
-                                statePos += bufSize;
-                            } else {
-                                int slen = stateLen - statePos;
-                                stateBuilder.getChars(statePos, stateLen, buf, 0);
-                                orig.write(buf, 0, slen);
-                                statePos += slen;
-                            }
-
-                        }
+                        writeStateContent(stateBuilder);
                         // Push us past the last '~' at the end of the marker
                         pos += len + STATE_MARKER_LEN;
                         tildeIdx = getNextDelimiterIndex(builder, pos);
 
                         stateBuilder = getState(stateManager, origWriter);
-                        stateLen = stateBuilder.length();
                     } else {
                         pos = tildeIdx;
                         tildeIdx = getNextDelimiterIndex(builder, tildeIdx + 1);
@@ -259,6 +266,226 @@ final class WriteBehindStateWriter extends Writer {
         // response so that all subsequent writes will make it to the
         // browser.
         out = orig;
+    }
+
+    /**
+     * Writes the state to the response, through the buffer.
+     *
+     * @param stateBuilder the state, as {@link #getState} returned it.
+     * @throws IOException when an I/O error occurs.
+     */
+    private void writeStateContent(StringBuilder stateBuilder) throws IOException {
+        int stateLen = stateBuilder.length();
+        int statePos = 0;
+        while (statePos < stateLen) {
+            int slen = Math.min(bufSize, stateLen - statePos);
+            stateBuilder.getChars(statePos, statePos + slen, buf, 0);
+            orig.write(buf, 0, slen);
+            statePos += slen;
+        }
+    }
+
+    /**
+     * Buffers the content written after the first state marker as a list of fixed chunks, which it never copies again,
+     * and writes them to the response chunk by chunk. After {@link #expectMarker()}, records where the next write
+     * containing a <code>~</code> starts when it is exactly the state marker, and otherwise that a marker was missed.
+     * Writes without a <code>~</code> before it, such as the end of a start tag, cannot hold a part of the marker. Any
+     * other write holding a <code>~</code>, such as cached markup holding a marker or the page's own text, also counts
+     * as a missed marker, so that the content is then searched for every marker text, as before.
+     */
+    static final class ChunkedWriter extends Writer {
+
+        private static final int FIRST_CHUNK_SIZE = 1024;
+        private static final int CHUNK_SIZE = 8192;
+        private static final String MARKER = RIConstants.SAVESTATE_FIELD_MARKER;
+
+        private char[][] chunks = new char[8][];
+        private int chunkCount;
+        private char[] current;
+        private int used;
+        private int completedLength;
+
+        int[] markers = new int[2];
+        int markerCount;
+        boolean markerMissed;
+        private boolean expectingMarker;
+
+        ChunkedWriter() {
+            current = new char[FIRST_CHUNK_SIZE];
+            chunks[chunkCount++] = current;
+        }
+
+        int length() {
+            return completedLength + used;
+        }
+
+        private void nextChunk() {
+            completedLength += used;
+            if (chunkCount == chunks.length) {
+                chunks = Arrays.copyOf(chunks, chunkCount * 2);
+            }
+            current = new char[CHUNK_SIZE];
+            chunks[chunkCount++] = current;
+            used = 0;
+        }
+
+        /** The next write is expected to be the state marker. */
+        void expectMarker() {
+            if (expectingMarker) {
+                markerMissed = true;
+            }
+            expectingMarker = true;
+        }
+
+        /**
+         * Called before a write containing a <code>~</code> while a marker is expected: records the marker when the
+         * write is exactly the marker.
+         */
+        private void markerWritten(boolean isMarker) {
+            expectingMarker = false;
+            if (!isMarker) {
+                markerMissed = true;
+                return;
+            }
+            if (markerCount == markers.length) {
+                markers = Arrays.copyOf(markers, markerCount * 2);
+            }
+            markers[markerCount++] = length();
+        }
+
+        private void checkMarker(char[] cbuf, int off, int len) {
+            for (int i = 0; i < len; i++) {
+                if (cbuf[off + i] == '~') {
+                    markerWritten(i == 0 && isMarker(cbuf, off, len));
+                    return;
+                }
+            }
+        }
+
+        private static boolean hasTilde(char[] cbuf, int off, int len) {
+            for (int i = off; i < off + len; i++) {
+                if (cbuf[i] == '~') {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        private static boolean isMarker(char[] cbuf, int off, int len) {
+            if (len != STATE_MARKER_LEN) {
+                return false;
+            }
+            for (int i = 0; i < len; i++) {
+                if (cbuf[off + i] != MARKER.charAt(i)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        private void checkMarker(String str, int off, int len) {
+            int tilde = str.indexOf('~', off);
+            if (tilde >= 0 && tilde < off + len) {
+                markerWritten(len == STATE_MARKER_LEN && tilde == off && (str == MARKER && off == 0 || str.startsWith(MARKER, off)));
+            }
+        }
+
+        @Override
+        public void write(int c) {
+            if (c == '~') {
+                if (expectingMarker) {
+                    markerWritten(false);
+                } else {
+                    markerMissed = true;
+                }
+            }
+            if (used == current.length) {
+                nextChunk();
+            }
+            current[used++] = (char) c;
+        }
+
+        @Override
+        public void write(char[] cbuf, int off, int len) {
+            if (expectingMarker) {
+                checkMarker(cbuf, off, len);
+            } else if (!markerMissed && hasTilde(cbuf, off, len)) {
+                markerMissed = true;
+            }
+            while (len > 0) {
+                if (used == current.length) {
+                    nextChunk();
+                }
+                int n = Math.min(len, current.length - used);
+                System.arraycopy(cbuf, off, current, used, n);
+                used += n;
+                off += n;
+                len -= n;
+            }
+        }
+
+        @Override
+        public void write(String str) {
+            write(str, 0, str.length());
+        }
+
+        @Override
+        public void write(String str, int off, int len) {
+            if (expectingMarker) {
+                checkMarker(str, off, len);
+            } else if (!markerMissed) {
+                int tilde = str.indexOf('~', off);
+                if (tilde >= 0 && tilde < off + len) {
+                    markerMissed = true;
+                }
+            }
+            while (len > 0) {
+                if (used == current.length) {
+                    nextChunk();
+                }
+                int n = Math.min(len, current.length - used);
+                str.getChars(off, off + n, current, used);
+                used += n;
+                off += n;
+                len -= n;
+            }
+        }
+
+        @Override
+        public void flush() {
+            // no-op
+        }
+
+        @Override
+        public void close() {
+            // no-op
+        }
+
+        /** Writes the buffered characters in [from, to) to <code>writer</code>, straight from the chunks. */
+        void writeTo(Writer writer, int from, int to) throws IOException {
+            int chunkStart = 0;
+            for (int i = 0; i < chunkCount && chunkStart < to; i++) {
+                char[] chunk = chunks[i];
+                int chunkLength = i == chunkCount - 1 ? used : chunk.length;
+                int chunkEnd = chunkStart + chunkLength;
+                if (chunkEnd > from) {
+                    int start = Math.max(from, chunkStart) - chunkStart;
+                    int end = Math.min(to, chunkEnd) - chunkStart;
+                    if (end > start) {
+                        writer.write(chunk, start, end - start);
+                    }
+                }
+                chunkStart = chunkEnd;
+            }
+        }
+
+        StringBuilder toStringBuilder() {
+            StringBuilder builder = new StringBuilder(length());
+            for (int i = 0; i < chunkCount; i++) {
+                builder.append(chunks[i], 0, i == chunkCount - 1 ? used : chunks[i].length);
+            }
+            return builder;
+        }
     }
 
     /**
