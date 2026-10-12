@@ -19,20 +19,25 @@ package com.sun.faces.el;
 
 import static java.util.Map.entry;
 
+import java.text.MessageFormat;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.MissingResourceException;
 import java.util.Optional;
 import java.util.ResourceBundle;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.function.Supplier;
 
 import com.sun.faces.context.flash.FlashELResolver;
 
 import jakarta.el.ArrayELResolver;
+import jakarta.el.BeanELResolver;
 import jakarta.el.ELClass;
 import jakarta.el.ELContext;
 import jakarta.el.ELException;
@@ -110,6 +115,15 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
 
     /** Base classes: index of the first property resolver that may resolve an instance of the class. */
     private volatile ClassValue<Integer> _propertyStart = newPropertyStarts();
+
+    /**
+     * Bean getters. When the first property resolver that may resolve a base class is the BeanELResolver, it resolves
+     * every property of that class, so its getter is called directly, without the reflective lookup and call of the
+     * BeanELResolver. The functions are held by this chain, which belongs to one application.
+     */
+    private volatile Map<Class<?>, BeanPropertyReaders> _beanReaders = new ConcurrentHashMap<>();
+    private static final int MAX_BEAN_CLASSES = 4096;
+    private static final BeanResolverKind BEAN_RESOLVER_KIND = BeanResolverKind.of(BeanELResolver.class);
 
     /** Incremented whenever the chain changes, so that a start computed against an older chain is not stored. */
     private volatile int _generation;
@@ -391,6 +405,13 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         ELResolver[] resolvers = _propertyELResolvers;
         int count = _propertyELResolverCount;
 
+        if (start < count && property instanceof String && resolvers[start].getClass() == BeanELResolver.class && BEAN_RESOLVER_KIND != null) {
+            Function<Object, Object> reader = beanReader(base.getClass(), (String) property);
+            if (reader != null) {
+                return BEAN_RESOLVER_KIND.read(context, reader, base, property);
+            }
+        }
+
         for (int i = start; i < count; i++) {
             Object result = resolvers[i].getValue(context, base, property);
 
@@ -400,6 +421,21 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         }
 
         return null;
+    }
+
+    /**
+     * @return the getter of the property, or <code>null</code> when the BeanELResolver must read it
+     */
+    private Function<Object, Object> beanReader(Class<?> baseClass, String property) {
+        Map<Class<?>, BeanPropertyReaders> beanReaders = _beanReaders;
+        BeanPropertyReaders readers = beanReaders.get(baseClass);
+        if (readers == null) {
+            if (beanReaders.size() >= MAX_BEAN_CLASSES) {
+                return null;
+            }
+            readers = beanReaders.computeIfAbsent(baseClass, BeanPropertyReaders::new);
+        }
+        return readers.reader(property);
     }
 
     private Integer computePropertyStart(Class<?> baseClass) {
@@ -421,6 +457,7 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
         _rootStart.clear();
         // A fresh ClassValue drops every per-class start computed so far.
         _propertyStart = newPropertyStarts();
+        _beanReaders = new ConcurrentHashMap<>();
     }
 
     private ClassValue<Integer> newPropertyStarts() {
@@ -654,5 +691,81 @@ public class DemuxCompositeELResolver extends FacesCompositeELResolver {
     @Override
     public Class<?> getCommonPropertyType(ELContext context, Object base) {
         return null;
+    }
+
+    /**
+     * How the BeanELResolver of the EL API in use calls a getter: when it marks the property as resolved, and how it
+     * wraps an exception of the getter. A getter called directly behaves the same way.
+     */
+    private enum BeanResolverKind {
+
+        /** The API of Apache Tomcat: resolved before the call, exception wrapped with a localized message. */
+        TOMCAT {
+            @Override
+            Object read(ELContext context, Function<Object, Object> reader, Object base, Object property) {
+                context.setPropertyResolved(base, property);
+                try {
+                    return reader.apply(base);
+                } catch (VirtualMachineError e) {
+                    throw e;
+                } catch (Throwable e) {
+                    throw new ELException(tomcatMessage(context, "propertyReadError", base.getClass().getName(), property.toString()), e);
+                }
+            }
+        },
+
+        /** The API of Jakarta Expression Language: resolved after the call, exception wrapped as is. */
+        JAKARTA {
+            @Override
+            Object read(ELContext context, Function<Object, Object> reader, Object base, Object property) {
+                Object value;
+                try {
+                    value = reader.apply(base);
+                } catch (Throwable e) {
+                    throw new ELException(e);
+                }
+                context.setPropertyResolved(base, property);
+                return value;
+            }
+        };
+
+        abstract Object read(ELContext context, Function<Object, Object> reader, Object base, Object property);
+
+        /**
+         * @return the kind of the given BeanELResolver class, or <code>null</code> when it is not known, and its getters
+         * must not be called directly
+         */
+        static BeanResolverKind of(Class<?> beanResolverClass) {
+            if (hasSibling(beanResolverClass, "BeanSupport")) {
+                return TOMCAT;
+            }
+            if (hasSibling(beanResolverClass, "ELUtil")) {
+                return JAKARTA;
+            }
+            return null;
+        }
+
+        private static boolean hasSibling(Class<?> type, String simpleName) {
+            try {
+                Class.forName(type.getPackageName() + "." + simpleName, false, type.getClassLoader());
+                return true;
+            } catch (ClassNotFoundException | LinkageError e) {
+                return false;
+            }
+        }
+
+        /** The message of <code>jakarta.el.Util.message</code> of Apache Tomcat. */
+        static String tomcatMessage(ELContext context, String name, Object... props) {
+            Locale locale = context.getLocale();
+            if (locale == null) {
+                locale = Locale.getDefault();
+            }
+            try {
+                String template = ResourceBundle.getBundle("jakarta.el.LocalStrings", locale, BeanELResolver.class.getClassLoader()).getString(name);
+                return MessageFormat.format(template, props);
+            } catch (MissingResourceException e) {
+                return "Missing Resource: '" + name + "' for Locale " + locale.getDisplayName();
+            }
+        }
     }
 }
